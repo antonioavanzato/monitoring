@@ -4,7 +4,7 @@
  */
 window.CM_CONFIG = {
   // Публичный URL Yandex Cloud Function (API Gateway или https://functions.yandexcloud.net/<id>)
-  API_BASE: 'https://functions.yandexcloud.net/REPLACE_WITH_GATEWAY_ID',
+  API_BASE: 'https://d5dv3oi96qbceipsi7c5.kocrdvxt.apigw.yandexcloud.net',
 
   // Эндпоинты admin-api / monitor-aggregator
   ENDPOINTS: {
