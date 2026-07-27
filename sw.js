@@ -4,7 +4,7 @@
  *  - запросы к API (CM_CONFIG.API_BASE) — network-only, НИКОГДА не кэшируются:
  *    в них ездит Authorization: Bearer и приватные метрики.
  */
-const VERSION = 'v6';
+const VERSION = 'v7';
 const STATIC_CACHE = 'cm-static-' + VERSION;
 
 const PRECACHE = [

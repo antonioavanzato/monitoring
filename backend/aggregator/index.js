@@ -122,16 +122,23 @@ async function collect(key, saKeyBase64, folderId) {
 
   const d1 = new Date(now.getTime() - 864e5);
 
-  const [calls, errors, errors24h, recent] = await Promise.all([
+  const [calls, errors, errors24h, inits24h, finished24h, recent] = await Promise.all([
     read('functions_finished', monthStart, now),
     read('functions_errors', d30, now),
     // за сутки — чтобы отличить «сломано сейчас» от «починили две недели назад»:
     // тридцатидневный счётчик держит старые ошибки ещё месяц после починки
     read('functions_errors', d1, now),
+    // инициализации против вызовов за те же сутки: доля холодных стартов
+    // показывает, доживает ли инстанс до следующего обращения
+    read('functions_inits', d1, now),
+    read('functions_finished', d1, now),
     // минутная сетка за последний час — ищем последнюю непустую точку (keep-warm)
     read('functions_finished', hourAgo, now,
          { gridInterval: 60_000, gridAggregation: 'SUM' })
   ]);
+
+  const done24 = sumAll(finished24h);
+  const cold24 = sumAll(inits24h);
 
   let lastInvocationAt = null;
   for (const m of (recent.metrics || []).filter((x) => !isOwn(x))) {
@@ -153,6 +160,10 @@ async function collect(key, saKeyBase64, folderId) {
     limit: LIMIT,
     errors30d: sumAll(errors),
     errors24h: sumAll(errors24h),
+    calls24h: done24,
+    coldStarts24h: cold24,
+    // null, а не 0: без вызовов доля не определена и рисовать её нечестно
+    coldStartPct: done24 > 0 ? Math.min(100, (cold24 / done24) * 100) : null,
     lastInvocationAt
   };
 }

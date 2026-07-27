@@ -269,3 +269,6 @@ input[type=password] {
 input[type=password]:focus { outline: none; border-color: var(--accent); }
 
 footer { margin-top: 28px; text-align: center; font-size: 11px; color: var(--text-dim); }
+
+.stat .sub.warn { color: var(--warn); }
+.stat .sub.err  { color: var(--err); }

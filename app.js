@@ -90,7 +90,8 @@
             '<div class="v" data-f="errors">—</div>' +
             '<div class="sub" data-f="errors24">—</div></div>' +
           '<div class="stat"><div class="k">Keep-warm</div>' +
-            '<div class="v"><span class="dot"></span><span class="warm-text">—</span></div></div>' +
+            '<div class="v"><span class="dot"></span><span class="warm-text">—</span></div>' +
+            '<div class="sub" data-f="cold">—</div></div>' +
         '</div>';
       card.querySelector('h2').textContent = p.name;
       cardsEl.appendChild(card);
@@ -103,7 +104,8 @@
         errors: card.querySelector('[data-f=errors]'),
         errors24: card.querySelector('[data-f=errors24]'),
         dot: card.querySelector('.dot'),
-        warm: card.querySelector('.warm-text')
+        warm: card.querySelector('.warm-text'),
+        cold: card.querySelector('[data-f=cold]')
       };
     });
   }
@@ -127,6 +129,7 @@
       el.errors24.textContent = '';
       el.dot.className = 'dot err';
       el.warm.textContent = 'нет данных';
+      el.cold.textContent = '';
       return;
     }
     el.pct.title = '';
@@ -158,6 +161,17 @@
       : 'err';
     el.dot.className = 'dot ' + state;
     el.warm.textContent = agoText(min);
+
+    // Доля холодных стартов: сколько вызовов за сутки поднимали инстанс с нуля.
+    // Высокая доля означает, что keep-warm не держит инстанс живым.
+    var cold = project.coldStartPct;
+    if (typeof cold !== 'number') {
+      el.cold.textContent = '';
+    } else {
+      el.cold.textContent = 'холодных стартов: ' + cold.toFixed(0) + '%';
+      el.cold.className = 'sub' + (cold >= 50 ? ' err' : (cold >= 20 ? ' warn' : ''));
+      el.cold.title = fmt(project.coldStarts24h) + ' из ' + fmt(project.calls24h) + ' вызовов за сутки';
+    }
   }
 
   function markStale() {
@@ -191,6 +205,7 @@
           el.errors24.textContent = '';
           el.dot.className = 'dot';
           el.warm.textContent = '—';
+          el.cold.textContent = '';
         });
 
         var ts = data.generatedAt ? new Date(data.generatedAt) : new Date();
