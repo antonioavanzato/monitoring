@@ -207,6 +207,7 @@ body { -ms-touch-action: pan-y; }
 .stat .k { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .04em; }
 .stat .v { font-size: 20px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
 .stat .v.err { color: var(--err); }
+.stat .sub { font-size: 11px; color: var(--text-dim); margin-top: 2px; min-height: 14px; }
 
 .dot {
   display: inline-block;

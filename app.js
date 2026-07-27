@@ -86,7 +86,9 @@
         '<div class="usage-label"><span>Free-tier вызовов</span><strong>—</strong></div>' +
         '<div class="bar"><span></span></div>' +
         '<div class="stats">' +
-          '<div class="stat"><div class="k">Ошибок за 30 дней</div><div class="v" data-f="errors">—</div></div>' +
+          '<div class="stat"><div class="k">Ошибок за 30 дней</div>' +
+            '<div class="v" data-f="errors">—</div>' +
+            '<div class="sub" data-f="errors24">—</div></div>' +
           '<div class="stat"><div class="k">Keep-warm</div>' +
             '<div class="v"><span class="dot"></span><span class="warm-text">—</span></div></div>' +
         '</div>';
@@ -99,6 +101,7 @@
         pct: card.querySelector('.usage-label strong'),
         bar: card.querySelector('.bar > span'),
         errors: card.querySelector('[data-f=errors]'),
+        errors24: card.querySelector('[data-f=errors24]'),
         dot: card.querySelector('.dot'),
         warm: card.querySelector('.warm-text')
       };
@@ -121,6 +124,7 @@
       el.bar.className = 'err';
       el.errors.textContent = '—';
       el.errors.className = 'v';
+      el.errors24.textContent = '';
       el.dot.className = 'dot err';
       el.warm.textContent = 'нет данных';
       return;
@@ -138,8 +142,14 @@
     el.bar.className = pct >= 90 ? 'err' : (pct >= 70 ? 'warn' : '');
 
     var errs = Number(project.errors30d) || 0;
+    var errs24 = Number(project.errors24h) || 0;
     el.errors.textContent = fmt(errs);
-    el.errors.className = 'v' + (errs > 0 ? ' err' : '');
+    // Красным помечаем только то, что ломается сейчас: тридцатидневный
+    // счётчик держит давно починенные ошибки ещё месяц.
+    el.errors.className = 'v' + (errs24 > 0 ? ' err' : '');
+    el.errors24.textContent = errs24 > 0
+      ? 'за сутки: ' + fmt(errs24)
+      : (errs > 0 ? 'за сутки: нет' : '');
 
     var min = ago(project.lastInvocationAt);
     var state = min == null ? 'err'
@@ -178,6 +188,7 @@
           el.pct.textContent = 'не подключено';
           el.bar.style.width = '0%';
           el.errors.textContent = '—';
+          el.errors24.textContent = '';
           el.dot.className = 'dot';
           el.warm.textContent = '—';
         });

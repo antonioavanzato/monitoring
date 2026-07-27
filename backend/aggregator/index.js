@@ -120,9 +120,14 @@ async function collect(key, saKeyBase64, folderId) {
   const read = (name, from, to, downsampling) =>
     readMetric(iam, folderId, q(name), from, to, downsampling);
 
-  const [calls, errors, recent] = await Promise.all([
+  const d1 = new Date(now.getTime() - 864e5);
+
+  const [calls, errors, errors24h, recent] = await Promise.all([
     read('functions_finished', monthStart, now),
     read('functions_errors', d30, now),
+    // за сутки — чтобы отличить «сломано сейчас» от «починили две недели назад»:
+    // тридцатидневный счётчик держит старые ошибки ещё месяц после починки
+    read('functions_errors', d1, now),
     // минутная сетка за последний час — ищем последнюю непустую точку (keep-warm)
     read('functions_finished', hourAgo, now,
          { gridInterval: 60_000, gridAggregation: 'SUM' })
@@ -147,6 +152,7 @@ async function collect(key, saKeyBase64, folderId) {
     calls: sumAll(calls),
     limit: LIMIT,
     errors30d: sumAll(errors),
+    errors24h: sumAll(errors24h),
     lastInvocationAt
   };
 }
