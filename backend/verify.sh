@@ -31,6 +31,26 @@ find_profile() {
 MONTH_START=$(date -u +%Y-%m-01T00:00:00Z)
 NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
+# Сумма за произвольное окно — чтобы сверять с биллингом,
+# который мог начать собирать данные позже начала месяца.
+window() {
+  local token="$1" folder="$2" from="$3"
+  curl -s -m 40 -X POST \
+    -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+    "https://monitoring.api.cloud.yandex.net/monitoring/v2/data/read?folderId=${folder}" \
+    -d "{\"query\":\"\\\"functions_finished\\\"{service=\\\"serverless-functions\\\"}\",\"fromTime\":\"$from\",\"toTime\":\"$NOW\",\"downsampling\":{\"maxPoints\":100,\"gridAggregation\":\"SUM\"}}" \
+  | node -e '
+      let raw=""; process.stdin.on("data",d=>raw+=d).on("end",()=>{
+        let j; try { j=JSON.parse(raw); } catch { console.log("ошибка"); return; }
+        if (j.code) { console.log("ошибка API"); return; }
+        const t=(j.metrics||[]).reduce((acc,m)=>{
+          const ts=m.timeseries||{};
+          return acc+(ts.doubleValues||ts.int64Values||[]).reduce((a,b)=>a+(Number(b)||0),0);
+        },0);
+        console.log(Math.round(t).toLocaleString("ru-RU"));
+      });'
+}
+
 # Одна и та же сумма при разном числе точек? Если нет — виновата
 # агрегация, а не данные.
 probe() {
@@ -67,6 +87,14 @@ check() {
     printf "     functions_finished, maxPoints=%-5s → %s\n" "$pts" "$(probe "$token" "$folder" functions_finished "$pts")"
   done
   echo "     functions_started,  maxPoints=100   → $(probe "$token" "$folder" functions_started 100)"
+  echo
+  echo "   ${YLW}по окнам${OFF} (для сверки с биллингом, если он считает не с начала месяца):"
+  for d in 1 2 3 5 7 14; do
+    local from
+    from=$(date -u -v-${d}d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "$d days ago" +%Y-%m-%dT%H:%M:%SZ)
+    printf "     последние %-3s дн. → %s\n" "$d" "$(window "$token" "$folder" "$from")"
+  done
+  echo "     с начала месяца   → $(probe "$token" "$folder" functions_finished 100)"
   echo
 
   local body
