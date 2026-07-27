@@ -19,7 +19,14 @@ RED=$'\e[31m'; GRN=$'\e[32m'; YLW=$'\e[33m'; BLD=$'\e[1m'; OFF=$'\e[0m'
 # ./setup.sh --dry-run  — показывает каждую изменяющую команду и НЕ выполняет её.
 # Чтение (get/list) при этом работает по-настоящему, чтобы план был честным.
 DRY=0
-[ "${1:-}" = "--dry-run" ] && DRY=1
+CODE_ONLY=0
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run)   DRY=1 ;;
+    # только перезалить код функций: пароль и ключи не трогаем
+    --code-only) CODE_ONLY=1 ;;
+  esac
+done
 
 # Перехватываем вызовы yc: функция с этим именем имеет приоритет над бинарником.
 # Печатаем прямо в терминал: у части вызовов вывод заглушён (>/dev/null 2>&1),
@@ -196,6 +203,10 @@ case "$GO" in
 esac
 
 # ─────────────────────────────────────────────────────────────
+if [ "$CODE_ONLY" = 1 ]; then
+  step "Режим --code-only: пароль и ключи не трогаем"
+  ok "переливаем только код функций, секрет cm-secrets остаётся как есть"
+else
 step "Пароль для входа в дашборд"
 echo "  Вводится скрыто. Нигде не сохраняется — в облако уедет только bcrypt-хеш."
 
@@ -218,6 +229,7 @@ unset PW1 PW2
 ok "хеш готов"
 
 JWT_SECRET=$(openssl rand -hex 32)
+fi
 
 # ─────────────────────────────────────────────────────────────
 step "Создаю сервисные аккаунты и забираю ключи"
@@ -278,6 +290,13 @@ prepare_project() {
 
 KEY_AV=""; KEY_AL=""; KEY_DA=""
 
+if [ "$CODE_ONLY" = 1 ]; then
+  # ключи уже лежат в Lockbox; отмечаем, какие облака участвуют
+  [ -n "$P_AVANZATO" ] && KEY_AV="есть"
+  [ -n "$P_ALGA" ]     && KEY_AL="есть"
+  [ -n "$P_DARIA" ]    && KEY_DA="есть"
+else
+
 if [ -n "$P_AVANZATO" ]; then
   RES=$(prepare_project avanzato "$P_AVANZATO") || exit 1
   FOLDER_AV=${RES%%$'\t'*}; KEY_AV=${RES#*$'\t'}
@@ -291,6 +310,7 @@ if [ -n "$P_DARIA" ]; then
   FOLDER_DA=${RES%%$'\t'*}; KEY_DA=${RES#*$'\t'}
 fi
 unset RES
+fi
 
 # ─────────────────────────────────────────────────────────────
 step "Перехожу в профиль $P_HOME — здесь будут жить функции"
@@ -299,6 +319,7 @@ HOME_FOLDER=$(yc config get folder-id)
 ok "каталог $HOME_FOLDER"
 
 # ─────────────────────────────────────────────────────────────
+if [ "$CODE_ONLY" != 1 ]; then
 step "Кладу секреты в Lockbox"
 
 PAYLOAD=$(printf '[{"key":"ADMIN_PASSWORD_HASH","text_value":"%s"},{"key":"JWT_SECRET","text_value":"%s"}' \
@@ -317,6 +338,7 @@ else
     --description "Cloud Monitor: пароль, JWT, ключи СА" \
     --payload "$PAYLOAD" >/dev/null || die "не создать секрет cm-secrets"
   ok "секрет cm-secrets создан"
+fi
 fi
 # Аргументы агрегатора — только по тем облакам, что реально настроены.
 AGG_ARGS=()

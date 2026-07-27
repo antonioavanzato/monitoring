@@ -45,9 +45,23 @@ const readCookie = (event, name) => {
 const refreshCookie = (token, maxAge) =>
   `cm_rt=${token}; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=${maxAge}`;
 
+/**
+ * Какое действие запрошено: login / session / logout.
+ * API Gateway отдаёт в event.path ШАБЛОН ('/auth/{action}'), а не реальный
+ * путь, поэтому сначала смотрим на параметр пути и только потом на строку.
+ */
+const routeOf = (event) => {
+  const p = event.params || event.pathParams || event.pathParameters || {};
+  if (p.action) return String(p.action).toLowerCase();
+
+  const raw = event.requestContext?.http?.path || event.url || event.path || '';
+  const m = String(raw).match(/\/auth\/([a-z]+)/i);
+  return m ? m[1].toLowerCase() : '';
+};
+
 exports.handler = async (event) => {
-  const path = event.path || event.url || '/';
   const method = event.httpMethod || event.requestContext?.http?.method || 'POST';
+  const route = routeOf(event);
 
   if (method === 'OPTIONS') return { statusCode: 204, headers: cors, body: '' };
 
@@ -57,7 +71,7 @@ exports.handler = async (event) => {
   }
 
   // ---- вход по паролю ----
-  if (path.endsWith('/auth/login')) {
+  if (route === 'login') {
     let password;
     try {
       password = JSON.parse(event.body || '{}').password;
@@ -80,7 +94,7 @@ exports.handler = async (event) => {
   }
 
   // ---- восстановление сессии по cookie ----
-  if (path.endsWith('/auth/session')) {
+  if (route === 'session') {
     const rt = readCookie(event, 'cm_rt');
     if (!rt) return json(401, { error: 'no_session' });
     try {
@@ -93,7 +107,7 @@ exports.handler = async (event) => {
   }
 
   // ---- выход ----
-  if (path.endsWith('/auth/logout')) {
+  if (route === 'logout') {
     return {
       statusCode: 204,
       headers: { ...cors, 'Set-Cookie': refreshCookie('', 0) },
@@ -101,5 +115,6 @@ exports.handler = async (event) => {
     };
   }
 
-  return json(404, { error: 'not_found' });
+  console.error('неизвестный маршрут', { route, path: event.path, url: event.url });
+  return json(404, { error: 'not_found', route });
 };
