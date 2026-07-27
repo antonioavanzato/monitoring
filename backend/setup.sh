@@ -47,6 +47,10 @@ yc() {
       *" create"*|*"add-access-binding"*|*"add-version"*|*" update "*|*" update --"*)
         say_plan "yc $*"
         return 0 ;;
+      *" get "*)
+        # ресурса ещё нет — это нормально, не пугаем пользователя ошибкой
+        command yc "$@" 2>/dev/null
+        return $? ;;
     esac
   fi
   command yc "$@"
@@ -75,7 +79,9 @@ type -P yc >/dev/null 2>&1 || die "не установлен yc (Yandex Cloud CL
 command -v openssl >/dev/null || die "не найден openssl"
 ok "node $(node -v), yc $(command yc version 2>/dev/null | head -1)"
 
-b64() { base64 -w0 "$1" 2>/dev/null || base64 "$1" | tr -d '\n'; }
+# Чтение из stdin — единственная форма, одинаково работающая в macOS и Linux:
+# у BSD-base64 нет -w0, а GNU-base64 переносит строки, которые убирает tr.
+b64() { base64 < "$1" | tr -d '\n\r'; }
 jsonval() { grep -o "\"$2\": *\"[^\"]*\"" <<<"$1" | head -1 | sed 's/.*: *"//; s/"$//'; }
 
 PROFILES=$(yc config profile list 2>/dev/null | sed 's/ ACTIVE//' | awk '{print $1}')
@@ -257,6 +263,14 @@ prepare_project() {
   local key_b64
   key_b64=$(b64 "$keyfile")
   rm -f "$keyfile"           # в base64 уже забрали, на диске не держим
+
+  # Молча уехавший пустой ключ — худшее, что тут может случиться:
+  # функция задеплоится и не увидит метрик. Лучше остановиться.
+  if [ "$DRY" != 1 ] && [ ${#key_b64} -lt 100 ]; then
+    die "ключ для $name закодировался неправильно (получилось ${#key_b64} символов).
+Без этого агрегатор не сможет читать метрики. Проверьте, что команда
+'base64' работает: echo test | base64"
+  fi
   ok "$name готов" >&2
 
   printf '%s\t%s\n' "$folder" "$key_b64"
