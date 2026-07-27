@@ -220,7 +220,7 @@ while :; do
 done
 
 echo "  Считаю хеш…"
-HASHDIR=$(mktemp -d); trap 'rm -rf "$HASHDIR"; restore_profile' EXIT
+HASHDIR=$(mktemp -d); trap 'rm -rf "${HASHDIR:-}"; restore_profile' EXIT
 ( cd "$HASHDIR" && npm init -y >/dev/null 2>&1 && npm install bcryptjs >/dev/null 2>&1 ) \
   || die "не удалось поставить bcryptjs (нет интернета?)"
 PW_HASH=$(cd "$HASHDIR" && node -e "console.log(require('bcryptjs').hashSync(process.argv[1],12))" "$PW1") \
@@ -421,7 +421,7 @@ fi
 # ─────────────────────────────────────────────────────────────
 step "Поднимаю API Gateway"
 
-SPEC=$(mktemp); trap 'rm -rf "$HASHDIR" "$SPEC"; restore_profile' EXIT
+SPEC=$(mktemp); trap 'rm -rf "${HASHDIR:-}" "${SPEC:-}"; restore_profile' EXIT
 cat > "$SPEC" <<SPECEOF
 openapi: 3.0.0
 info:
