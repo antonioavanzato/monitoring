@@ -145,9 +145,14 @@ DEFAULT_HOME=$P_AVANZATO
 [ -n "$DEFAULT_HOME" ] || DEFAULT_HOME=$P_DARIA
 
 echo
-read -r -p "  В каком профиле разместить сами функции [$DEFAULT_HOME]: " P_HOME
-P_HOME=${P_HOME:-$DEFAULT_HOME}
-grep -qx "$P_HOME" <<<"$PROFILES" || die "профиль '$P_HOME' не найден"
+echo "  В каком облаке разместить сами функции? Просто нажмите Enter — возьмём $DEFAULT_HOME."
+while :; do
+  read -r -p "  Профиль [$DEFAULT_HOME]: " P_HOME
+  P_HOME=${P_HOME:-$DEFAULT_HOME}
+  grep -qx "$P_HOME" <<<"$PROFILES" && break
+  echo "    профиля '$P_HOME' нет. Доступны: $(echo $PROFILES | tr '\n' ' ')"
+  echo "    (нажмите Enter, чтобы взять $DEFAULT_HOME)"
+done
 
 # ─────────────────────────────────────────────────────────────
 step "Проверяю, что ничего вашего не заденем"
