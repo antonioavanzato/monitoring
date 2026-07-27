@@ -19,7 +19,6 @@ const ISSUER = 'cloud-monitor';
 // показания. Приходят из setup.sh списком через запятую.
 const EXCLUDE = (process.env.EXCLUDE_FUNCTIONS || '')
   .split(',').map((s) => s.trim()).filter(Boolean);
-const EXCLUDE_SELECTOR = EXCLUDE.map((id) => `, function!="${id}"`).join('');
 
 // Ответ живёт минуту: несколько открытых вкладок или частые потягивания
 // не должны умножать обращения к Monitoring API.
@@ -92,8 +91,18 @@ async function readMetric(iam, folderId, query, from, to, downsampling) {
 
 const values = (ts) => (ts?.doubleValues || ts?.int64Values || []).map(Number);
 
+// Ряд принадлежит самому дашборду? Отсеиваем по метке в ответе, а не
+// селектором в запросе: "function!=..." выбрасывает заодно все ряды, у
+// которых метки function нет вовсе, и данные пропадали целиком.
+const isOwn = (m) => {
+  const f = m.labels?.function || m.labels?.resource_id || '';
+  return EXCLUDE.includes(f);
+};
+
 const sumAll = (payload) =>
-  (payload.metrics || []).reduce((acc, m) => acc + values(m.timeseries).reduce((a, b) => a + (b || 0), 0), 0);
+  (payload.metrics || [])
+    .filter((m) => !isOwn(m))
+    .reduce((acc, m) => acc + values(m.timeseries).reduce((a, b) => a + (b || 0), 0), 0);
 
 async function collect(key, saKeyBase64, folderId) {
   const iam = await iamToken(saKeyBase64);
@@ -105,26 +114,11 @@ async function collect(key, saKeyBase64, folderId) {
 
   // Каталог задаётся параметром folderId в URL. Меткой folderId у метрик нет —
   // селектор с ней не совпадал ни с чем, и ответ приходил пустым без ошибки.
-  //
-  // Собственные функции дашборда исключаем: они живут в одном из каталогов и
-  // иначе считали бы сами себя, завышая цифру тем сильнее, чем дольше открыт
-  // дашборд.
-  const q = (name) => `"${name}"{service="serverless-functions"${EXCLUDE_SELECTOR}}`;
+  // Собственные функции дашборда отфильтровываются уже из ответа, см. isOwn.
+  const q = (name) => `"${name}"{service="serverless-functions"}`;
 
-  // Если Monitoring не поймёт исключения, лучше показать чуть завышенное
-  // число, чем ошибку — поэтому есть запасной запрос без них.
-  const qPlain = (name) => `"${name}"{service="serverless-functions"}`;
-
-  // Пробуем с исключениями, при отказе повторяем без них.
-  const read = async (name, from, to, downsampling) => {
-    try {
-      return await readMetric(iam, folderId, q(name), from, to, downsampling);
-    } catch (e) {
-      if (!EXCLUDE_SELECTOR) throw e;
-      console.error('селектор с исключениями отвергнут, читаю без него:', e.message);
-      return readMetric(iam, folderId, qPlain(name), from, to, downsampling);
-    }
-  };
+  const read = (name, from, to, downsampling) =>
+    readMetric(iam, folderId, q(name), from, to, downsampling);
 
   const [calls, errors, recent] = await Promise.all([
     read('functions_finished', monthStart, now),
@@ -135,7 +129,7 @@ async function collect(key, saKeyBase64, folderId) {
   ]);
 
   let lastInvocationAt = null;
-  for (const m of recent.metrics || []) {
+  for (const m of (recent.metrics || []).filter((x) => !isOwn(x))) {
     const vals = values(m.timeseries);
     const stamps = m.timeseries?.timestamps || [];
     for (let i = vals.length - 1; i >= 0; i--) {
