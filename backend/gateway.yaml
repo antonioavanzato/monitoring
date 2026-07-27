@@ -1,0 +1,37 @@
+## Шаг 4. Спецификация API Gateway — сводит обе функции под один домен и даёт
+## пути, которых ждёт фронтенд.
+##
+## Замените <ID_ADMIN_API> и <ID_AGGREGATOR> на ID функций (yc serverless function list),
+## затем:  yc serverless api-gateway create --name cloud-monitor --spec=gateway.yaml
+openapi: 3.0.0
+info:
+  title: Cloud Monitor API
+  version: 1.0.0
+
+paths:
+  /auth/{action}:
+    parameters:
+      - name: action
+        in: path
+        required: true
+        schema: { type: string }
+    x-yc-apigateway-any-method:
+      x-yc-apigateway-integration:
+        type: cloud_functions
+        function_id: <ID_ADMIN_API>
+        tag: $latest
+        service_account_id: <ID_СЕРВИСНОГО_АККАУНТА_ШЛЮЗА>
+
+  /metrics:
+    get:
+      x-yc-apigateway-integration:
+        type: cloud_functions
+        function_id: <ID_AGGREGATOR>
+        tag: $latest
+        service_account_id: <ID_СЕРВИСНОГО_АККАУНТА_ШЛЮЗА>
+    options:
+      x-yc-apigateway-integration:
+        type: cloud_functions
+        function_id: <ID_AGGREGATOR>
+        tag: $latest
+        service_account_id: <ID_СЕРВИСНОГО_АККАУНТА_ШЛЮЗА>

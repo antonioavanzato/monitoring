@@ -1,0 +1,6 @@
+node_modules/
+# ключи сервисных аккаунтов — НИКОГДА в git
+key*.json
+*-key.json
+sa-key-*.json
+.env
