@@ -242,6 +242,8 @@ prepare_project() {
 
   local sa_id
   sa_id=$(jsonval "$(yc iam service-account get cm-monitor --format json)" id)
+  # в репетиции аккаунт не создавался, поэтому и id взяться неоткуда
+  [ -z "$sa_id" ] && [ "$DRY" = 1 ] && sa_id="<id сервисного аккаунта cm-monitor>"
   [ -n "$sa_id" ] || die "не получить id сервисного аккаунта в $profile"
 
   yc resource-manager folder add-access-binding "$folder" \
@@ -326,6 +328,7 @@ if ! yc iam service-account get cm-func >/dev/null 2>&1; then
   yc iam service-account create --name cm-func >/dev/null || die "не создать cm-func"
 fi
 FUNC_SA=$(jsonval "$(yc iam service-account get cm-func --format json)" id)
+[ -z "$FUNC_SA" ] && [ "$DRY" = 1 ] && FUNC_SA="<id сервисного аккаунта cm-func>"
 [ -n "$FUNC_SA" ] || die "не получить id cm-func"
 
 # функции должны уметь читать секрет и вызывать друг друга через шлюз
