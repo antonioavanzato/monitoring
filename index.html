@@ -13,7 +13,22 @@
 <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-<div class="wrap">
+
+<!-- Вход живёт на этой же странице: переход между страницами стирал бы
+     JS-контекст вместе с токеном, а восстановить сессию по cookie нельзя —
+     Safari и прочие режут её как стороннюю (github.io ≠ yandexcloud.net). -->
+<div class="login-wrap" id="gate" hidden>
+  <form class="login-box" id="gate-form" autocomplete="on">
+    <h1>Cloud Monitor</h1>
+    <p class="sub">Мониторинг free-tier</p>
+    <div class="banner" id="gate-banner"></div>
+    <label for="gate-password">Пароль</label>
+    <input type="password" id="gate-password" name="password" autocomplete="current-password" required>
+    <button class="btn btn-primary" id="gate-submit" type="submit">Войти</button>
+  </form>
+</div>
+
+<div class="wrap" id="dash" hidden>
 
   <div class="topbar">
     <h1>Cloud Monitor</h1>

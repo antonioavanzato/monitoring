@@ -49,9 +49,28 @@
     bannerEl.className = 'banner show ' + (kind || 'warn');
   }
 
+  var gate = document.getElementById('gate');
+  var dash = document.getElementById('dash');
+  var gateBanner = document.getElementById('gate-banner');
+  var gatePassword = document.getElementById('gate-password');
+  var gateSubmit = document.getElementById('gate-submit');
+
+  /** Показать форму входа. Никаких переходов: токен живёт в памяти вкладки. */
   function toLogin() {
-    if (timer) clearInterval(timer);
-    location.replace('./login.html');
+    if (timer) { clearInterval(timer); timer = null; }
+    dash.hidden = true;
+    gate.hidden = false;
+    gateBanner.className = 'banner';
+    gateSubmit.disabled = false;
+    gateSubmit.textContent = 'Войти';
+    gatePassword.value = '';
+    gatePassword.focus();
+  }
+
+  function toDashboard() {
+    gate.hidden = true;
+    dash.hidden = false;
+    return start();
   }
 
   // ---------- разметка ----------
@@ -187,12 +206,35 @@
   window.addEventListener('online', function () { connEl.textContent = ''; load(); });
   window.addEventListener('offline', function () { connEl.textContent = 'офлайн'; markStale(); });
 
+  document.getElementById('gate-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    gateBanner.className = 'banner';
+    gateSubmit.disabled = true;
+    gateSubmit.textContent = 'Проверяем…';
+
+    Auth.login(gatePassword.value).then(function () {
+      gatePassword.value = '';
+      return toDashboard();
+    }).catch(function (err) {
+      gateBanner.textContent = err && err.status === 401
+        ? 'Неверный пароль'
+        : 'Не удалось войти: ' + (err.message || err);
+      gateBanner.className = 'banner show error';
+      gateSubmit.disabled = false;
+      gateSubmit.textContent = 'Войти';
+      gatePassword.value = '';
+      gatePassword.focus();
+    });
+  });
+
   // ---------- bootstrap ----------
 
   build();
+
+  // Сессия могла уцелеть в httpOnly cookie — если браузер её не режет.
+  // Не уцелела: просто показываем форму, без всяких переходов.
   Auth.restore().then(function (ok) {
-    if (!ok) return toLogin();
-    return start();
+    return ok ? toDashboard() : toLogin();
   });
 
   if ('serviceWorker' in navigator) {
