@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d1117">
+<title>Вход · Cloud Monitor</title>
+<link rel="manifest" href="./manifest.json">
+<link rel="icon" href="./icons/icon-192.png">
+<link rel="apple-touch-icon" href="./icons/icon-192.png">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<div class="login-wrap">
+  <form class="login-box" id="form" autocomplete="on">
+    <h1>Cloud Monitor</h1>
+    <p class="sub">Мониторинг free-tier · 3 проекта</p>
+
+    <div class="banner" id="banner"></div>
+
+    <label for="password">Пароль</label>
+    <input type="password" id="password" name="password" autocomplete="current-password" required autofocus>
+
+    <button class="btn btn-primary" id="submit" type="submit">Войти</button>
+  </form>
+</div>
+
+<script src="./config.js"></script>
+<script src="./auth.js"></script>
+<script>
+(function () {
+  var form = document.getElementById('form');
+  var input = document.getElementById('password');
+  var submit = document.getElementById('submit');
+  var banner = document.getElementById('banner');
+
+  function fail(msg) {
+    banner.textContent = msg;
+    banner.className = 'banner error show';
+  }
+
+  // Если httpOnly-cookie ещё жива — сразу на дашборд.
+  Auth.restore().then(function (ok) {
+    if (ok) location.replace('./index.html');
+  });
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    banner.className = 'banner';
+    submit.disabled = true;
+    submit.textContent = 'Проверяем…';
+
+    Auth.login(input.value).then(function () {
+      input.value = '';
+      location.replace('./index.html');
+    }).catch(function (err) {
+      fail(err && err.status === 401 ? 'Неверный пароль' : 'Ошибка входа: ' + (err.message || err));
+      submit.disabled = false;
+      submit.textContent = 'Войти';
+      input.value = '';
+      input.focus();
+    });
+  });
+})();
+</script>
+</body>
+</html>
