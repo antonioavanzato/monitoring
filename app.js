@@ -200,10 +200,68 @@
 
   // ---------- события ----------
 
-  document.getElementById('refresh').addEventListener('click', function (e) {
-    e.currentTarget.disabled = true;
-    load().then(function () { e.currentTarget.disabled = false; });
-  });
+  // ---------- потягивание сверху вниз для обновления ----------
+
+  var pull = document.getElementById('pull');
+  var PULL_TRIGGER = 70;    // сколько протянуть, чтобы обновление сработало
+  var PULL_MAX = 110;       // дальше не тянется
+  var pullStartY = null;
+  var pullDist = 0;
+  var pullBusy = false;
+
+  function pullSet(dist) {
+    pull.style.transform = 'translateY(' + (dist - 56) + 'px)';
+    pull.classList.toggle('ready', dist >= PULL_TRIGGER);
+    pull.querySelector('.pull-text').textContent =
+      dist >= PULL_TRIGGER ? 'Отпустите' : 'Потяните';
+  }
+
+  function pullReset() {
+    pull.classList.add('settling');
+    pull.classList.remove('visible', 'ready', 'busy');
+    pull.style.transform = 'translateY(-56px)';
+    setTimeout(function () { pull.classList.remove('settling'); }, 260);
+  }
+
+  document.addEventListener('touchstart', function (e) {
+    if (pullBusy || dash.hidden || e.touches.length !== 1) return;
+    // тянем только когда список уже прокручен в самый верх
+    pullStartY = window.scrollY <= 0 ? e.touches[0].clientY : null;
+    pullDist = 0;
+  }, { passive: true });
+
+  document.addEventListener('touchmove', function (e) {
+    if (pullStartY === null || pullBusy) return;
+
+    var delta = e.touches[0].clientY - pullStartY;
+    if (delta <= 0) { pullStartY = null; pullReset(); return; }
+
+    // сопротивление: чем дальше, тем туже
+    pullDist = Math.min(PULL_MAX, delta * 0.5);
+    pull.classList.add('visible');
+    pull.classList.remove('settling');
+    pullSet(pullDist);
+    e.preventDefault();          // гасим отскок страницы
+  }, { passive: false });
+
+  document.addEventListener('touchend', function () {
+    if (pullStartY === null || pullBusy) return;
+    var trigger = pullDist >= PULL_TRIGGER;
+    pullStartY = null;
+
+    if (!trigger) return pullReset();
+
+    pullBusy = true;
+    pull.classList.add('busy', 'settling');
+    pull.classList.remove('ready');
+    pull.style.transform = 'translateY(0)';
+    pull.querySelector('.pull-text').textContent = 'Обновляю…';
+
+    load().then(function () {
+      pullBusy = false;
+      pullReset();
+    });
+  }, { passive: true });
 
   document.getElementById('logout').addEventListener('click', function () {
     Auth.logout().then(toLogin);
