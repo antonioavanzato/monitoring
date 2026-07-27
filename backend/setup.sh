@@ -14,6 +14,43 @@
 set -uo pipefail
 
 RED=$'\e[31m'; GRN=$'\e[32m'; YLW=$'\e[33m'; BLD=$'\e[1m'; OFF=$'\e[0m'
+
+# ── Режим репетиции ──────────────────────────────────────────
+# ./setup.sh --dry-run  — показывает каждую изменяющую команду и НЕ выполняет её.
+# Чтение (get/list) при этом работает по-настоящему, чтобы план был честным.
+DRY=0
+[ "${1:-}" = "--dry-run" ] && DRY=1
+
+# Перехватываем вызовы yc: функция с этим именем имеет приоритет над бинарником.
+# Печатаем прямо в терминал: у части вызовов вывод заглушён (>/dev/null 2>&1),
+# и без этого половина плана осталась бы невидимой.
+PLANFILE=$(mktemp)
+say_plan() {
+  local line="$1"
+  # прячем содержимое --payload: там хеш пароля и JWT-секрет
+  case "$line" in
+    *--payload*) line="${line%%--payload*}--payload <скрыто: пароль и ключи>" ;;
+  esac
+  printf '  %s\n' "$line" >> "$PLANFILE"
+}
+
+yc() {
+  if [ "$DRY" = 1 ]; then
+    case "$*" in
+      *"iam key create"*)
+        # ключ не выпускаем, но кладём заглушку, чтобы репетиция дошла до конца
+        local out="" prev=""
+        for a in "$@"; do [ "$prev" = "--output" ] && out="$a"; prev="$a"; done
+        say_plan "yc $*"
+        [ -n "$out" ] && echo '{"id":"dry","service_account_id":"dry","private_key":"dry"}' > "$out"
+        return 0 ;;
+      *" create"*|*"add-access-binding"*|*"add-version"*|*" update "*|*" update --"*)
+        say_plan "yc $*"
+        return 0 ;;
+    esac
+  fi
+  command yc "$@"
+}
 step()  { echo; echo "${BLD}==> $*${OFF}"; }
 ok()    { echo "  ${GRN}✓${OFF} $*"; }
 warn()  { echo "  ${YLW}!${OFF} $*"; }
@@ -37,31 +74,87 @@ jsonval() { grep -o "\"$2\": *\"[^\"]*\"" <<<"$1" | head -1 | sed 's/.*: *"//; s
 PROFILES=$(yc config profile list 2>/dev/null | sed 's/ ACTIVE//' | awk '{print $1}')
 [ -n "$PROFILES" ] || die "нет ни одного профиля yc. Выполните 'yc init' — по разу на каждое облако."
 
+# Активный профиль вернём как было, что бы дальше ни случилось.
+ORIG_PROFILE=$(yc config profile list 2>/dev/null | grep ACTIVE | awk '{print $1}')
+restore_profile() {
+  [ -n "${ORIG_PROFILE:-}" ] && yc config profile activate "$ORIG_PROFILE" >/dev/null 2>&1
+  return 0
+}
+trap 'restore_profile' EXIT
+
 echo
 echo "Ваши профили yc:"
 echo "$PROFILES" | sed 's/^/    /'
 
 # ─────────────────────────────────────────────────────────────
-step "Какой профиль отвечает за какой проект"
-echo "Впишите имя профиля из списка выше для каждого проекта."
+# Каталоги известны заранее — это идентификаторы, не секреты.
+FOLDER_AV="b1gvs59n7rkplk5jmu21"   # Avanzato («Мой»)
+FOLDER_AL="b1gjcf3ucce90qgigaii"   # ALGA
+FOLDER_DA="b1gfon9pe6vpmlgaq0f7"   # Daria
 
-ask_profile() {
-  local label="$1" var
-  while :; do
-    read -r -p "  Профиль для ${label}: " var
-    if grep -qx "$var" <<<"$PROFILES"; then echo "$var"; return; fi
-    echo "    нет такого профиля, попробуйте ещё раз"
+step "Определяю, какой профиль к какому облаку относится"
+echo "  Перебираю профили и смотрю, из какого виден каждый каталог."
+
+# Ищет профиль, из которого доступен указанный каталог.
+find_profile() {
+  local folder="$1" label="$2" p
+  for p in $PROFILES; do
+    yc config profile activate "$p" >/dev/null 2>&1 || continue
+    if yc resource-manager folder get "$folder" >/dev/null 2>&1; then
+      echo "     $label ($folder) → профиль $p" >&2
+      echo "$p"
+      return 0
+    fi
   done
+  die "ни один профиль yc не видит каталог $folder ($label).
+Похоже, вы ещё не логинились в это облако. Выполните 'yc init',
+войдите аккаунтом проекта $label, и запустите ./setup.sh снова."
 }
 
-P_AVANZATO=$(ask_profile "Avanzato")
-P_ALGA=$(ask_profile "ALGA")
-P_DARIA=$(ask_profile "Daria")
+P_AVANZATO=$(find_profile "$FOLDER_AV" "Avanzato") || exit 1
+P_ALGA=$(find_profile "$FOLDER_AL" "ALGA")         || exit 1
+P_DARIA=$(find_profile "$FOLDER_DA" "Daria")       || exit 1
+ok "все три облака найдены"
 
 echo
 read -r -p "  В каком профиле разместить сами функции [$P_AVANZATO]: " P_HOME
 P_HOME=${P_HOME:-$P_AVANZATO}
 grep -qx "$P_HOME" <<<"$PROFILES" || die "профиль '$P_HOME' не найден"
+
+# ─────────────────────────────────────────────────────────────
+step "Проверяю, что ничего вашего не заденем"
+
+yc config profile activate "$P_HOME" >/dev/null 2>&1
+CLASH=""
+for f in cm-admin-api cm-monitor-aggregator; do
+  yc serverless function get "$f" >/dev/null 2>&1 && CLASH="$CLASH\n     функция $f"
+done
+yc serverless api-gateway get cm-gateway >/dev/null 2>&1 && CLASH="$CLASH\n     шлюз cm-gateway"
+yc lockbox secret get cm-secrets    >/dev/null 2>&1 && CLASH="$CLASH\n     секрет cm-secrets"
+
+echo "  Будут созданы только ресурсы с префиксом cm- :"
+echo "     сервисный аккаунт cm-monitor — в каждом из трёх каталогов (роль monitoring.viewer, только чтение)"
+echo "     сервисный аккаунт cm-func    — в каталоге $P_HOME"
+echo "     секрет   cm-secrets"
+echo "     функции  cm-admin-api, cm-monitor-aggregator"
+echo "     шлюз     cm-gateway"
+echo
+echo "  Существующие функции, шлюзы и секреты не читаются, не меняются и не удаляются."
+echo "  Права выдаются добавлением (add-access-binding) — текущие доступы не затрагиваются."
+
+if [ -n "$CLASH" ]; then
+  echo
+  warn "уже существуют (будут ОБНОВЛЕНЫ до свежей версии):"
+  printf "$CLASH\n"
+  echo "  Если это не ресурсы Cloud Monitor от прошлого запуска — прервите (Ctrl+C) и переименуйте их."
+fi
+
+echo
+read -r -p "  Продолжить? [y/N]: " GO
+case "$GO" in
+  [yYдД]*) ;;
+  *) echo "  Отменено. Ничего не создано."; exit 0 ;;
+esac
 
 # ─────────────────────────────────────────────────────────────
 step "Пароль для входа в дашборд"
@@ -77,7 +170,7 @@ while :; do
 done
 
 echo "  Считаю хеш…"
-HASHDIR=$(mktemp -d); trap 'rm -rf "$HASHDIR"' EXIT
+HASHDIR=$(mktemp -d); trap 'rm -rf "$HASHDIR"; restore_profile' EXIT
 ( cd "$HASHDIR" && npm init -y >/dev/null 2>&1 && npm install bcryptjs >/dev/null 2>&1 ) \
   || die "не удалось поставить bcryptjs (нет интернета?)"
 PW_HASH=$(cd "$HASHDIR" && node -e "console.log(require('bcryptjs').hashSync(process.argv[1],12))" "$PW1") \
@@ -197,10 +290,10 @@ ok "зависимости на месте"
 ORIGIN="https://antonioavanzato.github.io"
 
 # ─────────────────────────────────────────────────────────────
-step "Деплой admin-api"
-yc serverless function create --name admin-api >/dev/null 2>&1
+step "Деплой cm-admin-api"
+yc serverless function create --name cm-admin-api >/dev/null 2>&1
 yc serverless function version create \
-  --function-name admin-api \
+  --function-name cm-admin-api \
   --runtime nodejs18 --entrypoint index.handler \
   --memory 128m --execution-timeout 10s \
   --source-path ./admin-api \
@@ -208,13 +301,13 @@ yc serverless function version create \
   --environment ALLOWED_ORIGIN="$ORIGIN" \
   --secret name=cm-secrets,key=ADMIN_PASSWORD_HASH,environment-variable=ADMIN_PASSWORD_HASH \
   --secret name=cm-secrets,key=JWT_SECRET,environment-variable=JWT_SECRET \
-  >/dev/null || die "не задеплоить admin-api"
-ok "admin-api задеплоен"
+  >/dev/null || die "не задеплоить cm-admin-api"
+ok "cm-admin-api задеплоен"
 
-step "Деплой monitor-aggregator"
-yc serverless function create --name monitor-aggregator >/dev/null 2>&1
+step "Деплой cm-monitor-aggregator"
+yc serverless function create --name cm-monitor-aggregator >/dev/null 2>&1
 yc serverless function version create \
-  --function-name monitor-aggregator \
+  --function-name cm-monitor-aggregator \
   --runtime nodejs18 --entrypoint index.handler \
   --memory 256m --execution-timeout 30s \
   --source-path ./aggregator \
@@ -227,16 +320,20 @@ yc serverless function version create \
   --secret name=cm-secrets,key=SA_KEY_AVANZATO,environment-variable=SA_KEY_AVANZATO \
   --secret name=cm-secrets,key=SA_KEY_ALGA,environment-variable=SA_KEY_ALGA \
   --secret name=cm-secrets,key=SA_KEY_DARIA,environment-variable=SA_KEY_DARIA \
-  >/dev/null || die "не задеплоить monitor-aggregator"
-ok "monitor-aggregator задеплоен"
+  >/dev/null || die "не задеплоить cm-monitor-aggregator"
+ok "cm-monitor-aggregator задеплоен"
 
-ADMIN_ID=$(jsonval "$(yc serverless function get admin-api --format json)" id)
-AGG_ID=$(jsonval "$(yc serverless function get monitor-aggregator --format json)" id)
+ADMIN_ID=$(jsonval "$(yc serverless function get cm-admin-api --format json)" id)
+AGG_ID=$(jsonval "$(yc serverless function get cm-monitor-aggregator --format json)" id)
+if [ "$DRY" = 1 ]; then
+  ADMIN_ID=${ADMIN_ID:-"<id функции cm-admin-api>"}
+  AGG_ID=${AGG_ID:-"<id функции cm-monitor-aggregator>"}
+fi
 
 # ─────────────────────────────────────────────────────────────
 step "Поднимаю API Gateway"
 
-SPEC=$(mktemp); trap 'rm -rf "$HASHDIR" "$SPEC"' EXIT
+SPEC=$(mktemp); trap 'rm -rf "$HASHDIR" "$SPEC"; restore_profile' EXIT
 cat > "$SPEC" <<SPECEOF
 openapi: 3.0.0
 info:
@@ -270,16 +367,31 @@ paths:
         service_account_id: ${FUNC_SA}
 SPECEOF
 
-if yc serverless api-gateway get cloud-monitor >/dev/null 2>&1; then
-  yc serverless api-gateway update --name cloud-monitor --spec="$SPEC" >/dev/null \
+if yc serverless api-gateway get cm-gateway >/dev/null 2>&1; then
+  yc serverless api-gateway update --name cm-gateway --spec="$SPEC" >/dev/null \
     || die "не обновить шлюз"
 else
-  yc serverless api-gateway create --name cloud-monitor --spec="$SPEC" >/dev/null \
+  yc serverless api-gateway create --name cm-gateway --spec="$SPEC" >/dev/null \
     || die "не создать шлюз"
 fi
 
-DOMAIN=$(jsonval "$(yc serverless api-gateway get cloud-monitor --format json)" domain)
-[ -n "$DOMAIN" ] || die "шлюз создан, но не удалось прочитать его домен. Посмотрите: yc serverless api-gateway get cloud-monitor"
+DOMAIN=$(jsonval "$(yc serverless api-gateway get cm-gateway --format json)" domain)
+
+if [ "$DRY" = 1 ]; then
+  echo
+  echo "${BLD}Полный список команд, которые выполнил бы настоящий запуск:${OFF}"
+  echo
+  cat "$PLANFILE"
+  rm -f "$PLANFILE"
+  echo
+  echo "${GRN}${BLD}Репетиция закончена. В облаках ничего не изменилось.${OFF}"
+  echo "Ни одной из перечисленных команд не выполнялось — только чтение (get/list)."
+  echo
+  echo "Если всё устраивает — запустите без флага:  ./setup.sh"
+  exit 0
+fi
+
+[ -n "$DOMAIN" ] || die "шлюз создан, но не удалось прочитать его домен. Посмотрите: yc serverless api-gateway get cm-gateway"
 ok "шлюз поднят: https://$DOMAIN"
 
 # ─────────────────────────────────────────────────────────────
@@ -303,7 +415,7 @@ case "$CODE" in
   401) ok "backend жив и правильно отвергает неверный пароль" ;;
   000) warn "шлюз пока не отвечает — обычно поднимается за минуту. Проверьте позже:
        curl -i -X POST https://$DOMAIN/auth/login -H 'Content-Type: application/json' -d '{\"password\":\"x\"}'" ;;
-  *)   warn "неожиданный ответ $CODE — смотрите логи: yc serverless function logs admin-api" ;;
+  *)   warn "неожиданный ответ $CODE — смотрите логи: yc serverless function logs cm-admin-api" ;;
 esac
 
 # ─────────────────────────────────────────────────────────────
