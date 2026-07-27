@@ -92,7 +92,9 @@ async function collect(key, saKeyBase64, folderId) {
   const d30 = new Date(now.getTime() - 30 * 864e5);
   const hourAgo = new Date(now.getTime() - 36e5);
 
-  const q = (name) => `"${name}"{service="serverless-functions", folderId="${folderId}"}`;
+  // Каталог задаётся параметром folderId в URL. Меткой folderId у метрик нет —
+  // селектор с ней не совпадал ни с чем, и ответ приходил пустым без ошибки.
+  const q = (name) => `"${name}"{service="serverless-functions"}`;
 
   const [calls, errors, recent] = await Promise.all([
     readMetric(iam, folderId, q('functions_finished'), monthStart, now),
