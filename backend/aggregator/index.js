@@ -15,6 +15,17 @@ const ORIGIN = process.env.ALLOWED_ORIGIN || 'https://antonioavanzato.github.io'
 const LIMIT = Number(process.env.FREE_TIER_CALLS) || 1_000_000;
 const ISSUER = 'cloud-monitor';
 
+// Идентификаторы самих функций дашборда — их вызовы не должны попадать в
+// показания. Приходят из setup.sh списком через запятую.
+const EXCLUDE = (process.env.EXCLUDE_FUNCTIONS || '')
+  .split(',').map((s) => s.trim()).filter(Boolean);
+const EXCLUDE_SELECTOR = EXCLUDE.map((id) => `, function!="${id}"`).join('');
+
+// Ответ живёт минуту: несколько открытых вкладок или частые потягивания
+// не должны умножать обращения к Monitoring API.
+const CACHE_TTL = 60_000;
+let cache = null;
+
 const cors = {
   'Access-Control-Allow-Origin': ORIGIN,
   'Access-Control-Allow-Credentials': 'true',
@@ -94,14 +105,33 @@ async function collect(key, saKeyBase64, folderId) {
 
   // Каталог задаётся параметром folderId в URL. Меткой folderId у метрик нет —
   // селектор с ней не совпадал ни с чем, и ответ приходил пустым без ошибки.
-  const q = (name) => `"${name}"{service="serverless-functions"}`;
+  //
+  // Собственные функции дашборда исключаем: они живут в одном из каталогов и
+  // иначе считали бы сами себя, завышая цифру тем сильнее, чем дольше открыт
+  // дашборд.
+  const q = (name) => `"${name}"{service="serverless-functions"${EXCLUDE_SELECTOR}}`;
+
+  // Если Monitoring не поймёт исключения, лучше показать чуть завышенное
+  // число, чем ошибку — поэтому есть запасной запрос без них.
+  const qPlain = (name) => `"${name}"{service="serverless-functions"}`;
+
+  // Пробуем с исключениями, при отказе повторяем без них.
+  const read = async (name, from, to, downsampling) => {
+    try {
+      return await readMetric(iam, folderId, q(name), from, to, downsampling);
+    } catch (e) {
+      if (!EXCLUDE_SELECTOR) throw e;
+      console.error('селектор с исключениями отвергнут, читаю без него:', e.message);
+      return readMetric(iam, folderId, qPlain(name), from, to, downsampling);
+    }
+  };
 
   const [calls, errors, recent] = await Promise.all([
-    readMetric(iam, folderId, q('functions_finished'), monthStart, now),
-    readMetric(iam, folderId, q('functions_errors'), d30, now),
+    read('functions_finished', monthStart, now),
+    read('functions_errors', d30, now),
     // минутная сетка за последний час — ищем последнюю непустую точку (keep-warm)
-    readMetric(iam, folderId, q('functions_finished'), hourAgo, now,
-               { gridInterval: 60_000, gridAggregation: 'SUM' })
+    read('functions_finished', hourAgo, now,
+         { gridInterval: 60_000, gridAggregation: 'SUM' })
   ]);
 
   let lastInvocationAt = null;
@@ -145,6 +175,14 @@ exports.handler = async (event) => {
     };
   }
 
+  if (cache && Date.now() - cache.at < CACHE_TTL) {
+    return {
+      statusCode: 200,
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...cors },
+      body: cache.body
+    };
+  }
+
   // Проект участвует, только если для него есть и ключ, и каталог: облака
   // подключаются по одному, недостающие просто пропускаем.
   const defs = [
@@ -164,9 +202,12 @@ exports.handler = async (event) => {
     return { key: defs[i][0], folderId: defs[i][2], error: msg.slice(0, 200) };
   });
 
+  const body = JSON.stringify({ generatedAt: new Date().toISOString(), projects });
+  cache = { at: Date.now(), body };
+
   return {
     statusCode: 200,
     headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...cors },
-    body: JSON.stringify({ generatedAt: new Date().toISOString(), projects })
+    body
   };
 };

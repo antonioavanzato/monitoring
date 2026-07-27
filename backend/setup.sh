@@ -383,8 +383,19 @@ ok "зависимости на месте"
 ORIGIN="https://antonioavanzato.github.io"
 
 # ─────────────────────────────────────────────────────────────
-step "Деплой cm-admin-api"
+# Заводим обе функции заранее: их id нужны агрегатору, чтобы исключить
+# собственные вызовы из показаний (иначе дашборд считает сам себя).
 yc serverless function create --name cm-admin-api >/dev/null 2>&1
+yc serverless function create --name cm-monitor-aggregator >/dev/null 2>&1
+ADMIN_ID=$(jsonval "$(yc serverless function get cm-admin-api --format json)" id)
+AGG_ID=$(jsonval "$(yc serverless function get cm-monitor-aggregator --format json)" id)
+if [ "$DRY" = 1 ]; then
+  ADMIN_ID=${ADMIN_ID:-"<id функции cm-admin-api>"}
+  AGG_ID=${AGG_ID:-"<id функции cm-monitor-aggregator>"}
+fi
+EXCLUDE_IDS="$ADMIN_ID,$AGG_ID"
+
+step "Деплой cm-admin-api"
 yc serverless function version create \
   --function-name cm-admin-api \
   --runtime nodejs18 --entrypoint index.handler \
@@ -398,7 +409,6 @@ yc serverless function version create \
 ok "cm-admin-api задеплоен"
 
 step "Деплой cm-monitor-aggregator"
-yc serverless function create --name cm-monitor-aggregator >/dev/null 2>&1
 yc serverless function version create \
   --function-name cm-monitor-aggregator \
   --runtime nodejs18 --entrypoint index.handler \
@@ -406,17 +416,11 @@ yc serverless function version create \
   --source-path ./aggregator \
   --service-account-id "$FUNC_SA" \
   --environment ALLOWED_ORIGIN="$ORIGIN" \
+  --environment EXCLUDE_FUNCTIONS="$EXCLUDE_IDS" \
   --secret name=cm-secrets,key=JWT_SECRET,environment-variable=JWT_SECRET \
   ${AGG_ARGS[@]+"${AGG_ARGS[@]}"} \
   >/dev/null || die "не задеплоить cm-monitor-aggregator"
 ok "cm-monitor-aggregator задеплоен"
-
-ADMIN_ID=$(jsonval "$(yc serverless function get cm-admin-api --format json)" id)
-AGG_ID=$(jsonval "$(yc serverless function get cm-monitor-aggregator --format json)" id)
-if [ "$DRY" = 1 ]; then
-  ADMIN_ID=${ADMIN_ID:-"<id функции cm-admin-api>"}
-  AGG_ID=${AGG_ID:-"<id функции cm-monitor-aggregator>"}
-fi
 
 # ─────────────────────────────────────────────────────────────
 step "Поднимаю API Gateway"
