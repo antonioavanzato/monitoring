@@ -97,6 +97,14 @@ check() {
   echo "     с начала месяца   → $(probe "$token" "$folder" functions_finished 100)"
   echo
 
+  echo "   ${YLW}кандидаты на «время выполнения» (ГБ×час, лимит 10/мес)${OFF}:"
+  echo "     в биллинге за этот месяц было 0.48 gbyte*hour — ищем совпадение"
+  for m in functions_sum_duration functions_sum_memory functions_avg_memory duration_ms_histogram_sum; do
+    printf "     %-28s сырая сумма = %s\n" "$m" "$(probe "$token" "$folder" "$m" 100)"
+  done
+  echo "     подсказка: сумма длительности в мс делится на 3 600 000 → часы"
+  echo
+
   echo "   ${YLW}ошибки за 30 дней, по функциям${OFF}:"
   local d30
   d30=$(date -u -v-30d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "30 days ago" +%Y-%m-%dT%H:%M:%SZ)
