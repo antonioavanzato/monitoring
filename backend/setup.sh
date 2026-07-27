@@ -103,29 +103,50 @@ step "Определяю, какой профиль к какому облаку
 echo "  Перебираю профили и смотрю, из какого виден каждый каталог."
 
 # Ищет профиль, из которого доступен указанный каталог.
+# Не находит — не беда: проект просто пропускаем, добавите потом.
 find_profile() {
   local folder="$1" label="$2" p
   for p in $PROFILES; do
     yc config profile activate "$p" >/dev/null 2>&1 || continue
     if yc resource-manager folder get "$folder" >/dev/null 2>&1; then
-      echo "     $label ($folder) → профиль $p" >&2
+      echo "     ${GRN}✓${OFF} $label → профиль $p" >&2
       echo "$p"
       return 0
     fi
   done
-  die "ни один профиль yc не видит каталог $folder ($label).
-Похоже, вы ещё не логинились в это облако. Выполните 'yc init',
-войдите аккаунтом проекта $label, и запустите ./setup.sh снова."
+  echo "     ${YLW}—${OFF} $label ($folder): ни один профиль не видит этот каталог, пропускаю" >&2
+  echo ""
 }
 
-P_AVANZATO=$(find_profile "$FOLDER_AV" "Avanzato") || exit 1
-P_ALGA=$(find_profile "$FOLDER_AL" "ALGA")         || exit 1
-P_DARIA=$(find_profile "$FOLDER_DA" "Daria")       || exit 1
-ok "все три облака найдены"
+P_AVANZATO=$(find_profile "$FOLDER_AV" "Avanzato")
+P_ALGA=$(find_profile "$FOLDER_AL" "ALGA")
+P_DARIA=$(find_profile "$FOLDER_DA" "Daria")
+
+READY=0
+[ -n "$P_AVANZATO" ] && READY=$((READY+1))
+[ -n "$P_ALGA" ]     && READY=$((READY+1))
+[ -n "$P_DARIA" ]    && READY=$((READY+1))
+
+[ "$READY" -gt 0 ] || die "не найдено ни одного из трёх облаков.
+Выполните 'yc init' хотя бы для одного и запустите ./setup.sh снова."
+
+if [ "$READY" -lt 3 ]; then
+  echo
+  warn "настроено облаков: $READY из 3."
+  echo "  Дашборд поднимется с ними. Остальные добавите позже: сделайте 'yc init'"
+  echo "  для недостающего аккаунта и запустите ./setup.sh ещё раз — он всё дополнит."
+else
+  ok "все три облака найдены"
+fi
+
+# Функции разместим в первом доступном облаке.
+DEFAULT_HOME=$P_AVANZATO
+[ -n "$DEFAULT_HOME" ] || DEFAULT_HOME=$P_ALGA
+[ -n "$DEFAULT_HOME" ] || DEFAULT_HOME=$P_DARIA
 
 echo
-read -r -p "  В каком профиле разместить сами функции [$P_AVANZATO]: " P_HOME
-P_HOME=${P_HOME:-$P_AVANZATO}
+read -r -p "  В каком профиле разместить сами функции [$DEFAULT_HOME]: " P_HOME
+P_HOME=${P_HOME:-$DEFAULT_HOME}
 grep -qx "$P_HOME" <<<"$PROFILES" || die "профиль '$P_HOME' не найден"
 
 # ─────────────────────────────────────────────────────────────
@@ -140,7 +161,7 @@ yc serverless api-gateway get cm-gateway >/dev/null 2>&1 && CLASH="$CLASH\n     
 yc lockbox secret get cm-secrets    >/dev/null 2>&1 && CLASH="$CLASH\n     секрет cm-secrets"
 
 echo "  Будут созданы только ресурсы с префиксом cm- :"
-echo "     сервисный аккаунт cm-monitor — в каждом из трёх каталогов (роль monitoring.viewer, только чтение)"
+echo "     сервисный аккаунт cm-monitor — в настроенных каталогах ($READY шт., роль monitoring.viewer, только чтение)"
 echo "     сервисный аккаунт cm-func    — в каталоге $P_HOME"
 echo "     секрет   cm-secrets"
 echo "     функции  cm-admin-api, cm-monitor-aggregator"
@@ -234,19 +255,21 @@ prepare_project() {
   printf '%s\t%s\n' "$folder" "$key_b64"
 }
 
-RES=$(prepare_project avanzato "$P_AVANZATO") || exit 1
-FOLDER_AV=${RES%%$'\t'*}; KEY_AV=${RES#*$'\t'}
+KEY_AV=""; KEY_AL=""; KEY_DA=""
 
-RES=$(prepare_project alga "$P_ALGA") || exit 1
-FOLDER_AL=${RES%%$'\t'*}; KEY_AL=${RES#*$'\t'}
-
-RES=$(prepare_project daria "$P_DARIA") || exit 1
-FOLDER_DA=${RES%%$'\t'*}; KEY_DA=${RES#*$'\t'}
+if [ -n "$P_AVANZATO" ]; then
+  RES=$(prepare_project avanzato "$P_AVANZATO") || exit 1
+  FOLDER_AV=${RES%%$'\t'*}; KEY_AV=${RES#*$'\t'}
+fi
+if [ -n "$P_ALGA" ]; then
+  RES=$(prepare_project alga "$P_ALGA") || exit 1
+  FOLDER_AL=${RES%%$'\t'*}; KEY_AL=${RES#*$'\t'}
+fi
+if [ -n "$P_DARIA" ]; then
+  RES=$(prepare_project daria "$P_DARIA") || exit 1
+  FOLDER_DA=${RES%%$'\t'*}; KEY_DA=${RES#*$'\t'}
+fi
 unset RES
-
-for v in "$FOLDER_AV" "$KEY_AV" "$FOLDER_AL" "$KEY_AL" "$FOLDER_DA" "$KEY_DA"; do
-  [ -n "$v" ] || die "не удалось собрать данные одного из проектов"
-done
 
 # ─────────────────────────────────────────────────────────────
 step "Перехожу в профиль $P_HOME — здесь будут жить функции"
@@ -257,8 +280,12 @@ ok "каталог $HOME_FOLDER"
 # ─────────────────────────────────────────────────────────────
 step "Кладу секреты в Lockbox"
 
-PAYLOAD=$(printf '[{"key":"ADMIN_PASSWORD_HASH","text_value":"%s"},{"key":"JWT_SECRET","text_value":"%s"},{"key":"SA_KEY_AVANZATO","text_value":"%s"},{"key":"SA_KEY_ALGA","text_value":"%s"},{"key":"SA_KEY_DARIA","text_value":"%s"}]' \
-  "$PW_HASH" "$JWT_SECRET" "$KEY_AV" "$KEY_AL" "$KEY_DA")
+PAYLOAD=$(printf '[{"key":"ADMIN_PASSWORD_HASH","text_value":"%s"},{"key":"JWT_SECRET","text_value":"%s"}' \
+  "$PW_HASH" "$JWT_SECRET")
+[ -n "$KEY_AV" ] && PAYLOAD="$PAYLOAD$(printf ',{"key":"SA_KEY_AVANZATO","text_value":"%s"}' "$KEY_AV")"
+[ -n "$KEY_AL" ] && PAYLOAD="$PAYLOAD$(printf ',{"key":"SA_KEY_ALGA","text_value":"%s"}' "$KEY_AL")"
+[ -n "$KEY_DA" ] && PAYLOAD="$PAYLOAD$(printf ',{"key":"SA_KEY_DARIA","text_value":"%s"}' "$KEY_DA")"
+PAYLOAD="$PAYLOAD]"
 
 if yc lockbox secret get cm-secrets >/dev/null 2>&1; then
   yc lockbox payload add-version --name cm-secrets --payload "$PAYLOAD" >/dev/null \
@@ -270,6 +297,21 @@ else
     --payload "$PAYLOAD" >/dev/null || die "не создать секрет cm-secrets"
   ok "секрет cm-secrets создан"
 fi
+# Аргументы агрегатора — только по тем облакам, что реально настроены.
+AGG_ARGS=()
+if [ -n "$KEY_AV" ]; then
+  AGG_ARGS+=(--environment "FOLDER_AVANZATO=$FOLDER_AV")
+  AGG_ARGS+=(--secret "name=cm-secrets,key=SA_KEY_AVANZATO,environment-variable=SA_KEY_AVANZATO")
+fi
+if [ -n "$KEY_AL" ]; then
+  AGG_ARGS+=(--environment "FOLDER_ALGA=$FOLDER_AL")
+  AGG_ARGS+=(--secret "name=cm-secrets,key=SA_KEY_ALGA,environment-variable=SA_KEY_ALGA")
+fi
+if [ -n "$KEY_DA" ]; then
+  AGG_ARGS+=(--environment "FOLDER_DARIA=$FOLDER_DA")
+  AGG_ARGS+=(--secret "name=cm-secrets,key=SA_KEY_DARIA,environment-variable=SA_KEY_DARIA")
+fi
+
 unset PW_HASH PAYLOAD KEY_AV KEY_AL KEY_DA
 
 # ─────────────────────────────────────────────────────────────
@@ -320,13 +362,8 @@ yc serverless function version create \
   --source-path ./aggregator \
   --service-account-id "$FUNC_SA" \
   --environment ALLOWED_ORIGIN="$ORIGIN" \
-  --environment FOLDER_AVANZATO="$FOLDER_AV" \
-  --environment FOLDER_ALGA="$FOLDER_AL" \
-  --environment FOLDER_DARIA="$FOLDER_DA" \
   --secret name=cm-secrets,key=JWT_SECRET,environment-variable=JWT_SECRET \
-  --secret name=cm-secrets,key=SA_KEY_AVANZATO,environment-variable=SA_KEY_AVANZATO \
-  --secret name=cm-secrets,key=SA_KEY_ALGA,environment-variable=SA_KEY_ALGA \
-  --secret name=cm-secrets,key=SA_KEY_DARIA,environment-variable=SA_KEY_DARIA \
+  ${AGG_ARGS[@]+"${AGG_ARGS[@]}"} \
   >/dev/null || die "не задеплоить cm-monitor-aggregator"
 ok "cm-monitor-aggregator задеплоен"
 

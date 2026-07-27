@@ -134,10 +134,18 @@
         banner(null);
         (data.projects || []).forEach(paint);
 
-        // проекты, которых не было в ответе
+        // проекты, которых не было в ответе — облако ещё не подключено
         var seen = (data.projects || []).map(function (p) { return p.key; });
         cfg.PROJECTS.forEach(function (p) {
-          if (seen.indexOf(p.key) === -1) els[p.key].root.classList.add('stale');
+          if (seen.indexOf(p.key) !== -1) return;
+          var el = els[p.key];
+          el.root.classList.remove('loading');
+          el.root.classList.add('stale');
+          el.pct.textContent = 'не подключено';
+          el.bar.style.width = '0%';
+          el.errors.textContent = '—';
+          el.dot.className = 'dot';
+          el.warm.textContent = '—';
         });
 
         var ts = data.generatedAt ? new Date(data.generatedAt) : new Date();

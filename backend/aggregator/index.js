@@ -140,11 +140,13 @@ exports.handler = async (event) => {
     };
   }
 
+  // Проект участвует, только если для него есть и ключ, и каталог: облака
+  // подключаются по одному, недостающие просто пропускаем.
   const defs = [
     ['avanzato', process.env.SA_KEY_AVANZATO, process.env.FOLDER_AVANZATO],
     ['alga', process.env.SA_KEY_ALGA, process.env.FOLDER_ALGA],
     ['daria', process.env.SA_KEY_DARIA, process.env.FOLDER_DARIA]
-  ];
+  ].filter((d) => d[1] && d[2]);
 
   // один упавший проект не должен ронять весь ответ
   const settled = await Promise.allSettled(defs.map((d) => collect(d[0], d[1], d[2])));
