@@ -31,6 +31,26 @@ find_profile() {
 MONTH_START=$(date -u +%Y-%m-01T00:00:00Z)
 NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
+# Одна и та же сумма при разном числе точек? Если нет — виновата
+# агрегация, а не данные.
+probe() {
+  local token="$1" folder="$2" metric="$3" points="$4"
+  curl -s -m 40 -X POST \
+    -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+    "https://monitoring.api.cloud.yandex.net/monitoring/v2/data/read?folderId=${folder}" \
+    -d "{\"query\":\"\\\"${metric}\\\"{service=\\\"serverless-functions\\\"}\",\"fromTime\":\"$MONTH_START\",\"toTime\":\"$NOW\",\"downsampling\":{\"maxPoints\":${points},\"gridAggregation\":\"SUM\"}}" \
+  | node -e '
+      let raw=""; process.stdin.on("data",d=>raw+=d).on("end",()=>{
+        let j; try { j=JSON.parse(raw); } catch { console.log("ошибка"); return; }
+        if (j.code) { console.log("ошибка API: "+(j.message||"")); return; }
+        const t=(j.metrics||[]).reduce((acc,m)=>{
+          const ts=m.timeseries||{};
+          return acc+(ts.doubleValues||ts.int64Values||[]).reduce((a,b)=>a+(Number(b)||0),0);
+        },0);
+        console.log(Math.round(t).toLocaleString("ru-RU"));
+      });'
+}
+
 check() {
   local label="$1" folder="$2" profile="$3"
   echo
@@ -40,6 +60,14 @@ check() {
   yc config profile activate "$profile" >/dev/null 2>&1
   local token; token=$(yc iam create-token 2>/dev/null)
   [ -n "$token" ] || { echo "   не получить IAM-токен"; return; }
+
+  echo
+  echo "   ${YLW}зависимость суммы от числа точек${OFF} (у корректной суммы её быть не должно):"
+  for pts in 10 100 1000 5000; do
+    printf "     functions_finished, maxPoints=%-5s → %s\n" "$pts" "$(probe "$token" "$folder" functions_finished "$pts")"
+  done
+  echo "     functions_started,  maxPoints=100   → $(probe "$token" "$folder" functions_started 100)"
+  echo
 
   local body
   body=$(curl -s -m 40 -X POST \
