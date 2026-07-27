@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d1117">
+<title>Cloud Monitor</title>
+<link rel="manifest" href="./manifest.json">
+<link rel="icon" href="./icons/icon-192.png">
+<link rel="apple-touch-icon" href="./icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <h1>Cloud Monitor</h1>
+    <div style="display:flex;align-items:center;gap:10px">
+      <div class="meta">
+        <div id="updated">—</div>
+        <div id="conn"></div>
+      </div>
+      <button class="btn btn-ghost" id="refresh" type="button">↻</button>
+      <button class="btn btn-ghost" id="logout" type="button">Выйти</button>
+    </div>
+  </div>
+
+  <div class="banner" id="banner"></div>
+
+  <div class="cards" id="cards">
+    <!-- cards rendered by app.js -->
+  </div>
+
+  <footer>Free-tier usage · Yandex Cloud Functions</footer>
+</div>
+
+<script src="./config.js"></script>
+<script src="./auth.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>
