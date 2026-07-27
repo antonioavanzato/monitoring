@@ -112,6 +112,21 @@
     if (!el) return;
     el.root.classList.remove('loading', 'stale');
 
+    if (project.error) {
+      el.root.classList.add('stale');
+      el.folder.textContent = project.folderId || '';
+      el.pct.textContent = 'ошибка';
+      el.pct.title = project.error;
+      el.bar.style.width = '0%';
+      el.bar.className = 'err';
+      el.errors.textContent = '—';
+      el.errors.className = 'v';
+      el.dot.className = 'dot err';
+      el.warm.textContent = 'нет данных';
+      return;
+    }
+    el.pct.title = '';
+
     var limit = Number(project.limit) || cfg.FREE_TIER_CALLS;
     var calls = Number(project.calls) || 0;
     var pct = limit > 0 ? (calls / limit) * 100 : 0;

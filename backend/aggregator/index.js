@@ -69,7 +69,10 @@ async function readMetric(iam, folderId, query, from, to, downsampling) {
         query,
         fromTime: from.toISOString(),
         toTime: to.toISOString(),
-        downsampling: downsampling || { maxPoints: 1, gridAggregation: 'SUM' }
+        // maxPoints меньше 10 API отвергает ("too few points"). Берём с запасом
+        // и складываем все точки: каждая — сумма своего интервала, значит
+        // сумма точек и есть итог за period.
+        downsampling: downsampling || { maxPoints: 100, gridAggregation: 'SUM' }
       })
     });
   if (!res.ok) throw new Error('Monitoring ' + res.status + ' ' + (await res.text()));
@@ -150,10 +153,13 @@ exports.handler = async (event) => {
 
   // один упавший проект не должен ронять весь ответ
   const settled = await Promise.allSettled(defs.map((d) => collect(d[0], d[1], d[2])));
-  const projects = [];
-  settled.forEach((r, i) => {
-    if (r.status === 'fulfilled') projects.push(r.value);
-    else console.error('project ' + defs[i][0] + ' failed:', r.reason?.message || r.reason);
+  const projects = settled.map((r, i) => {
+    if (r.status === 'fulfilled') return r.value;
+    const msg = String(r.reason?.message || r.reason);
+    console.error('project ' + defs[i][0] + ' failed:', msg);
+    // отдаём проект с пометкой об ошибке: молча пропав, он выглядел бы
+    // на дашборде как неподключённый, и причину пришлось бы искать в логах
+    return { key: defs[i][0], folderId: defs[i][2], error: msg.slice(0, 200) };
   });
 
   return {
