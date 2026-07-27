@@ -90,27 +90,28 @@ JWT_SECRET=$(openssl rand -hex 32)
 # ─────────────────────────────────────────────────────────────
 step "Создаю сервисные аккаунты и забираю ключи"
 
-declare -A SA_KEY_B64 FOLDER_OF
-
+# Без ассоциативных массивов: в macOS штатный bash 3.2, там их нет.
+# Функция печатает в stdout строку "folderId<TAB>base64ключа", логи идут в stderr.
 prepare_project() {
   local name="$1" profile="$2"
-  echo
-  echo "  ── $name (профиль $profile)"
+  {
+    echo
+    echo "  ── $name (профиль $profile)"
+  } >&2
 
   yc config profile activate "$profile" >/dev/null 2>&1 || die "не переключиться на профиль $profile"
 
   local folder
-  folder=$(yc config get folder-id 2>/dev/null) || die "у профиля $profile не задан folder-id (выполните 'yc init')"
-  [ -n "$folder" ] || die "у профиля $profile пустой folder-id"
-  FOLDER_OF[$name]=$folder
-  echo "     каталог: $folder"
+  folder=$(yc config get folder-id 2>/dev/null)
+  [ -n "$folder" ] || die "у профиля $profile не задан folder-id (выполните 'yc init')"
+  echo "     каталог: $folder" >&2
 
   if yc iam service-account get cm-monitor >/dev/null 2>&1; then
-    echo "     сервисный аккаунт cm-monitor уже есть"
+    echo "     сервисный аккаунт cm-monitor уже есть" >&2
   else
     yc iam service-account create --name cm-monitor >/dev/null \
       || die "не создать сервисный аккаунт в $profile"
-    echo "     сервисный аккаунт создан"
+    echo "     сервисный аккаунт создан" >&2
   fi
 
   local sa_id
@@ -119,20 +120,33 @@ prepare_project() {
 
   yc resource-manager folder add-access-binding "$folder" \
       --role monitoring.viewer --subject "serviceAccount:$sa_id" >/dev/null 2>&1
-  echo "     право на чтение метрик выдано"
+  echo "     право на чтение метрик выдано" >&2
 
   local keyfile="key-$name.json"
   rm -f "$keyfile"
   yc iam key create --service-account-name cm-monitor --output "$keyfile" >/dev/null 2>&1 \
     || die "не создать ключ в $profile"
-  SA_KEY_B64[$name]=$(b64 "$keyfile")
+  local key_b64
+  key_b64=$(b64 "$keyfile")
   rm -f "$keyfile"           # в base64 уже забрали, на диске не держим
-  ok "$name готов"
+  ok "$name готов" >&2
+
+  printf '%s\t%s\n' "$folder" "$key_b64"
 }
 
-prepare_project avanzato "$P_AVANZATO"
-prepare_project alga     "$P_ALGA"
-prepare_project daria    "$P_DARIA"
+RES=$(prepare_project avanzato "$P_AVANZATO") || exit 1
+FOLDER_AV=${RES%%$'\t'*}; KEY_AV=${RES#*$'\t'}
+
+RES=$(prepare_project alga "$P_ALGA") || exit 1
+FOLDER_AL=${RES%%$'\t'*}; KEY_AL=${RES#*$'\t'}
+
+RES=$(prepare_project daria "$P_DARIA") || exit 1
+FOLDER_DA=${RES%%$'\t'*}; KEY_DA=${RES#*$'\t'}
+unset RES
+
+for v in "$FOLDER_AV" "$KEY_AV" "$FOLDER_AL" "$KEY_AL" "$FOLDER_DA" "$KEY_DA"; do
+  [ -n "$v" ] || die "не удалось собрать данные одного из проектов"
+done
 
 # ─────────────────────────────────────────────────────────────
 step "Перехожу в профиль $P_HOME — здесь будут жить функции"
@@ -144,7 +158,7 @@ ok "каталог $HOME_FOLDER"
 step "Кладу секреты в Lockbox"
 
 PAYLOAD=$(printf '[{"key":"ADMIN_PASSWORD_HASH","text_value":"%s"},{"key":"JWT_SECRET","text_value":"%s"},{"key":"SA_KEY_AVANZATO","text_value":"%s"},{"key":"SA_KEY_ALGA","text_value":"%s"},{"key":"SA_KEY_DARIA","text_value":"%s"}]' \
-  "$PW_HASH" "$JWT_SECRET" "${SA_KEY_B64[avanzato]}" "${SA_KEY_B64[alga]}" "${SA_KEY_B64[daria]}")
+  "$PW_HASH" "$JWT_SECRET" "$KEY_AV" "$KEY_AL" "$KEY_DA")
 
 if yc lockbox secret get cm-secrets >/dev/null 2>&1; then
   yc lockbox payload add-version --name cm-secrets --payload "$PAYLOAD" >/dev/null \
@@ -156,7 +170,7 @@ else
     --payload "$PAYLOAD" >/dev/null || die "не создать секрет cm-secrets"
   ok "секрет cm-secrets создан"
 fi
-unset PW_HASH PAYLOAD SA_KEY_B64
+unset PW_HASH PAYLOAD KEY_AV KEY_AL KEY_DA
 
 # ─────────────────────────────────────────────────────────────
 step "Сервисный аккаунт для функций"
@@ -206,9 +220,9 @@ yc serverless function version create \
   --source-path ./aggregator \
   --service-account-id "$FUNC_SA" \
   --environment ALLOWED_ORIGIN="$ORIGIN" \
-  --environment FOLDER_AVANZATO="${FOLDER_OF[avanzato]}" \
-  --environment FOLDER_ALGA="${FOLDER_OF[alga]}" \
-  --environment FOLDER_DARIA="${FOLDER_OF[daria]}" \
+  --environment FOLDER_AVANZATO="$FOLDER_AV" \
+  --environment FOLDER_ALGA="$FOLDER_AL" \
+  --environment FOLDER_DARIA="$FOLDER_DA" \
   --secret name=cm-secrets,key=JWT_SECRET,environment-variable=JWT_SECRET \
   --secret name=cm-secrets,key=SA_KEY_AVANZATO,environment-variable=SA_KEY_AVANZATO \
   --secret name=cm-secrets,key=SA_KEY_ALGA,environment-variable=SA_KEY_ALGA \
@@ -281,8 +295,9 @@ ok "config.js обновлён"
 step "Проверяю, что backend отвечает"
 
 sleep 3
-CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "https://$DOMAIN/auth/login" \
-  -H 'Content-Type: application/json' -d '{"password":"заведомо-неверный"}' || echo 000)
+CODE=$(curl -s -m 15 -o /dev/null -w '%{http_code}' -X POST "https://$DOMAIN/auth/login" \
+  -H 'Content-Type: application/json' -d '{"password":"заведомо-неверный"}' 2>/dev/null)
+[ -n "$CODE" ] || CODE=000
 
 case "$CODE" in
   401) ok "backend жив и правильно отвергает неверный пароль" ;;
