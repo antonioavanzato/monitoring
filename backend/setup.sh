@@ -393,7 +393,9 @@ if [ "$DRY" = 1 ]; then
   ADMIN_ID=${ADMIN_ID:-"<id функции cm-admin-api>"}
   AGG_ID=${AGG_ID:-"<id функции cm-monitor-aggregator>"}
 fi
-EXCLUDE_IDS="$ADMIN_ID,$AGG_ID"
+# И идентификаторы, и имена: метка function у разных метрик заполняется
+# то одним, то другим — по одному только id часть рядов не отсеивалась бы.
+EXCLUDE_IDS="$ADMIN_ID,$AGG_ID,cm-admin-api,cm-monitor-aggregator"
 
 step "Деплой cm-admin-api"
 yc serverless function version create \
