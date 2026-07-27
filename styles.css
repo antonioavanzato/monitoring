@@ -28,10 +28,16 @@ html, body {
   min-height: 100%;
 }
 
+/* env(safe-area-inset-*) — отступы под статус-бар и «чёлку» iOS.
+   Без них в standalone-режиме шапка уезжает под часы. */
 .wrap {
   max-width: 720px;
   margin: 0 auto;
-  padding: 20px 16px 48px;
+  padding:
+    calc(20px + env(safe-area-inset-top, 0px))
+    calc(16px + env(safe-area-inset-right, 0px))
+    calc(48px + env(safe-area-inset-bottom, 0px))
+    calc(16px + env(safe-area-inset-left, 0px));
 }
 
 /* ---- header ---- */
@@ -185,7 +191,11 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 20px;
+  padding:
+    calc(20px + env(safe-area-inset-top, 0px))
+    calc(20px + env(safe-area-inset-right, 0px))
+    calc(20px + env(safe-area-inset-bottom, 0px))
+    calc(20px + env(safe-area-inset-left, 0px));
 }
 .login-box {
   width: 100%;
