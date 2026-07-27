@@ -97,6 +97,32 @@ check() {
   echo "     с начала месяца   → $(probe "$token" "$folder" functions_finished 100)"
   echo
 
+  echo "   ${YLW}ошибки за 30 дней, по функциям${OFF}:"
+  local d30
+  d30=$(date -u -v-30d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "30 days ago" +%Y-%m-%dT%H:%M:%SZ)
+  curl -s -m 40 -X POST \
+    -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+    "https://monitoring.api.cloud.yandex.net/monitoring/v2/data/read?folderId=${folder}" \
+    -d "{\"query\":\"\\\"functions_errors\\\"{service=\\\"serverless-functions\\\"}\",\"fromTime\":\"$d30\",\"toTime\":\"$NOW\",\"downsampling\":{\"maxPoints\":100,\"gridAggregation\":\"SUM\"}}" \
+  | node -e '
+      let raw=""; process.stdin.on("data",d=>raw+=d).on("end",()=>{
+        let j; try { j=JSON.parse(raw); } catch { console.log("     не разобрать ответ"); return; }
+        if (j.code) { console.log("     ошибка API: "+(j.message||"")); return; }
+        const by={};
+        (j.metrics||[]).forEach(m=>{
+          const ts=m.timeseries||{};
+          const sum=(ts.doubleValues||ts.int64Values||[]).reduce((a,b)=>a+(Number(b)||0),0);
+          if (sum<=0) return;
+          const n=m.labels?.function||m.labels?.resource_id||"(без метки)";
+          by[n]=(by[n]||0)+sum;
+        });
+        const rows=Object.entries(by).sort((a,b)=>b[1]-a[1]);
+        if (!rows.length) { console.log("     ошибок нет"); return; }
+        rows.forEach(([n,v])=>console.log("     "+String(Math.round(v)).padStart(7)+"  "+n));
+        console.log("     "+String(Math.round(rows.reduce((a,[,v])=>a+v,0))).padStart(7)+"  ВСЕГО");
+      });'
+  echo
+
   local body
   body=$(curl -s -m 40 -X POST \
     -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
