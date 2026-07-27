@@ -62,11 +62,18 @@ cd "$(dirname "$0")" || die "не могу перейти в папку скри
 step "Проверяю инструменты"
 
 command -v node >/dev/null || die "не установлен node. Поставьте LTS с https://nodejs.org и повторите."
-command -v yc   >/dev/null || die "не установлен yc. Установка:
+
+# ВАЖНО: именно type -P, а не command -v — ниже определена shell-функция yc,
+# и command -v нашёл бы её, решив, что программа установлена.
+type -P yc >/dev/null 2>&1 || die "не установлен yc (Yandex Cloud CLI). Установка:
+
   curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash
-  exec -l \$SHELL"
+  exec -l \$SHELL
+
+После этого запустите ./setup.sh снова."
+
 command -v openssl >/dev/null || die "не найден openssl"
-ok "node $(node -v), yc есть"
+ok "node $(node -v), yc $(command yc version 2>/dev/null | head -1)"
 
 b64() { base64 -w0 "$1" 2>/dev/null || base64 "$1" | tr -d '\n'; }
 jsonval() { grep -o "\"$2\": *\"[^\"]*\"" <<<"$1" | head -1 | sed 's/.*: *"//; s/"$//'; }
