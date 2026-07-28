@@ -28,7 +28,7 @@ if echo "$LOGS" | grep -q "ERROR:\|not found"; then
   exit 1
 fi
 
-echo "$LOGS" | node -e '
+echo "$LOGS" | CM_FUNC="$FUNC" node -e '
   let raw = "";
   process.stdin.on("data", d => raw += d).on("end", () => {
     const lines = raw.split("\n");
@@ -74,6 +74,25 @@ echo "$LOGS" | node -e '
     console.log("  \x1b[1mвсего вызовов: " + calls.length +
                 ", холодных: " + cold +
                 " (" + (cold / calls.length * 100).toFixed(0) + "%)\x1b[0m");
+
+    // CLI отдаёт логи страницами и молча обрезает. Если окно в логах короче
+    // запрошенного или обрывается задолго до «сейчас» — выборка неполная,
+    // и делать по ней выводы нельзя.
+    const first = calls[0].start, last = calls[calls.length-1].start;
+    const spanMin = (last - first) / 60000;
+    const staleMin = (Date.now() - last) / 60000;
+    console.log("  окно в логах: " + new Date(first).toISOString().slice(11,19) +
+                " – " + new Date(last).toISOString().slice(11,19) + " UTC" +
+                " (" + spanMin.toFixed(0) + " мин), последняя запись " +
+                staleMin.toFixed(0) + " мин назад");
+
+    if (staleMin > 10) {
+      console.log("");
+      console.log("  \x1b[33m! Выборка обрезана\x1b[0m: логи заканчиваются задолго до текущего момента,");
+      console.log("    то есть CLI вернул только часть записей. Возьмите окно поменьше,");
+      console.log("    например ./coldstart-logs.sh " + (process.env.CM_FUNC || "hub-api") + " 20m,");
+      console.log("    и сверьте число вызовов с тем, что показывает ./coldstart.sh");
+    }
 
     const versions = [...new Set(calls.map(c => c.version))];
     console.log("  версий в выборке: " + versions.length + " — " + versions.join(", "));
