@@ -5,8 +5,12 @@
 #   cd backend && chmod +x setup.sh && ./setup.sh
 #
 # Скрипт сам: создаст сервисные аккаунты в трёх облаках, выдаст им права,
-# заберёт ключи, положит всё в Lockbox, задеплоит обе функции, поднимет
-# API Gateway и пропишет его адрес во фронтенд.
+# заберёт ключи, задеплоит обе функции, поднимет API Gateway и пропишет его
+# адрес во фронтенд.
+#
+# Секреты передаются переменными окружения функции, не через Lockbox: он
+# платный, а роль у ключей — monitoring.viewer, то есть чтение счётчиков
+# вызовов и ничего больше.
 #
 # Ничего заранее заполнять не надо — всё спросит по ходу.
 # Прервать можно в любой момент (Ctrl+C), повторный запуск безопасен.
@@ -90,6 +94,19 @@ ok "node $(node -v), yc $(command yc version 2>/dev/null | head -1)"
 # у BSD-base64 нет -w0, а GNU-base64 переносит строки, которые убирает tr.
 b64() { base64 < "$1" | tr -d '\n\r'; }
 jsonval() { grep -o "\"$2\": *\"[^\"]*\"" <<<"$1" | head -1 | sed 's/.*: *"//; s/"$//'; }
+
+# Переменные окружения уже развёрнутой версии функции: "имя<TAB>значение".
+# Нужны для --code-only, чтобы перелить код, не спрашивая пароль и не
+# перевыпуская ключи. Значения секретов больше не хранятся отдельно —
+# единственный их экземпляр живёт в самой функции.
+current_env() {
+  yc serverless function version get --function-name "$1" --format json 2>/dev/null \
+  | node -e 'let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
+      let j; try { j = JSON.parse(s); } catch { return; }
+      const e = j.environment || {};
+      for (const k of Object.keys(e)) console.log(k + "\t" + e[k]);
+    });' 2>/dev/null
+}
 
 PROFILES=$(yc config profile list 2>/dev/null | sed 's/ ACTIVE//' | awk '{print $1}')
 [ -n "$PROFILES" ] || die "нет ни одного профиля yc. Выполните 'yc init' — по разу на каждое облако."
@@ -361,43 +378,26 @@ HOME_FOLDER=$(yc config get folder-id)
 ok "каталог $HOME_FOLDER"
 
 # ─────────────────────────────────────────────────────────────
-if [ "$CODE_ONLY" != 1 ]; then
-step "Кладу секреты в Lockbox"
+# Lockbox не используем: он платный, а роль у ключей — monitoring.viewer,
+# то есть чтение счётчиков вызовов и ничего больше. Секреты передаём
+# переменными окружения функции; прочитать их может только владелец каталога.
+#
+# Значения сохраняем до unset ниже — они понадобятся при сборке команд деплоя.
+PW_HASH_KEEP="${PW_HASH:-}"
+JWT_SECRET_KEEP="${JWT_SECRET:-}"
+KEY_AV_KEEP="${KEY_AV:-}"
+KEY_AL_KEEP="${KEY_AL:-}"
+KEY_DA_KEEP="${KEY_DA:-}"
 
-PAYLOAD=$(printf '[{"key":"ADMIN_PASSWORD_HASH","text_value":"%s"},{"key":"JWT_SECRET","text_value":"%s"}' \
-  "$PW_HASH" "$JWT_SECRET")
-[ -n "$KEY_AV" ] && PAYLOAD="$PAYLOAD$(printf ',{"key":"SA_KEY_AVANZATO","text_value":"%s"}' "$KEY_AV")"
-[ -n "$KEY_AL" ] && PAYLOAD="$PAYLOAD$(printf ',{"key":"SA_KEY_ALGA","text_value":"%s"}' "$KEY_AL")"
-[ -n "$KEY_DA" ] && PAYLOAD="$PAYLOAD$(printf ',{"key":"SA_KEY_DARIA","text_value":"%s"}' "$KEY_DA")"
-PAYLOAD="$PAYLOAD]"
-
-if yc lockbox secret get cm-secrets >/dev/null 2>&1; then
-  yc lockbox payload add-version --name cm-secrets --payload "$PAYLOAD" >/dev/null \
-    || die "не обновить секрет cm-secrets"
-  ok "секрет cm-secrets обновлён"
-else
-  yc lockbox secret create --name cm-secrets \
-    --description "Cloud Monitor: пароль, JWT, ключи СА" \
-    --payload "$PAYLOAD" >/dev/null || die "не создать секрет cm-secrets"
-  ok "секрет cm-secrets создан"
-fi
-fi
-# Аргументы агрегатора — только по тем облакам, что реально настроены.
+# Каталоги — по тем облакам, что реально настроены.
+# Каталог передаём, если облако настроено: при полном запуске это значит
+# «ключ выпущен», при --code-only — «профиль для него нашёлся».
 AGG_ARGS=()
-if [ -n "$KEY_AV" ]; then
-  AGG_ARGS+=(--environment "FOLDER_AVANZATO=$FOLDER_AV")
-  AGG_ARGS+=(--secret "name=cm-secrets,key=SA_KEY_AVANZATO,environment-variable=SA_KEY_AVANZATO")
-fi
-if [ -n "$KEY_AL" ]; then
-  AGG_ARGS+=(--environment "FOLDER_ALGA=$FOLDER_AL")
-  AGG_ARGS+=(--secret "name=cm-secrets,key=SA_KEY_ALGA,environment-variable=SA_KEY_ALGA")
-fi
-if [ -n "$KEY_DA" ]; then
-  AGG_ARGS+=(--environment "FOLDER_DARIA=$FOLDER_DA")
-  AGG_ARGS+=(--secret "name=cm-secrets,key=SA_KEY_DARIA,environment-variable=SA_KEY_DARIA")
-fi
+if [ -n "$P_AVANZATO" ]; then AGG_ARGS+=(--environment "FOLDER_AVANZATO=$FOLDER_AV"); fi
+if [ -n "$P_ALGA" ];     then AGG_ARGS+=(--environment "FOLDER_ALGA=$FOLDER_AL");     fi
+if [ -n "$P_DARIA" ];    then AGG_ARGS+=(--environment "FOLDER_DARIA=$FOLDER_DA");    fi
 
-unset PW_HASH PAYLOAD KEY_AV KEY_AL KEY_DA
+unset PW_HASH KEY_AV KEY_AL KEY_DA
 
 # ─────────────────────────────────────────────────────────────
 step "Сервисный аккаунт для функций"
@@ -410,8 +410,6 @@ FUNC_SA=$(jsonval "$(yc iam service-account get cm-func --format json)" id)
 [ -n "$FUNC_SA" ] || die "не получить id cm-func"
 
 # функции должны уметь читать секрет и вызывать друг друга через шлюз
-yc resource-manager folder add-access-binding "$HOME_FOLDER" \
-  --role lockbox.payloadViewer --subject "serviceAccount:$FUNC_SA" >/dev/null 2>&1
 yc resource-manager folder add-access-binding "$HOME_FOLDER" \
   --role functions.functionInvoker --subject "serviceAccount:$FUNC_SA" >/dev/null 2>&1
 ok "cm-func готов ($FUNC_SA)"
@@ -439,6 +437,63 @@ fi
 # то одним, то другим — по одному только id часть рядов не отсеивалась бы.
 EXCLUDE_IDS="$ADMIN_ID,$AGG_ID,cm-admin-api,cm-monitor-aggregator"
 
+# ─────────────────────────────────────────────────────────────
+# Секреты передаём переменными окружения, а не через Lockbox: он платный, а
+# роль у ключей всего лишь monitoring.viewer — чтение счётчиков вызовов.
+#
+# В режиме --code-only значений у нас нет (пароль не спрашивали, ключи не
+# выпускали), поэтому переносим их из уже развёрнутой версии функции.
+SECRET_KEYS="ADMIN_PASSWORD_HASH JWT_SECRET SA_KEY_AVANZATO SA_KEY_ALGA SA_KEY_DARIA"
+
+ADMIN_ENV=(); AGG_ENV=()
+if [ "$CODE_ONLY" = 1 ]; then
+  step "Забираю секреты из развёрнутых версий"
+  # ВАЖНО: без $(...) — подстановка команд создаёт подоболочку, и массив,
+  # наполненный внутри неё, до основного скрипта не доходит. Счётчик при этом
+  # выглядит правильным, а секреты в деплой не попадают.
+  KEPT=0
+  keep_env() {                       # $1 функция, $2 имя массива
+    local key val
+    KEPT=0
+    while IFS=$'\t' read -r key val; do
+      [ -n "$key" ] || continue
+      case " $SECRET_KEYS " in
+        *" $key "*) eval "$2+=(--environment \"\$key=\$val\")"; KEPT=$((KEPT+1)) ;;
+      esac
+    done < <(current_env "$1")
+  }
+  keep_env cm-admin-api ADMIN_ENV;         n1=$KEPT
+  keep_env cm-monitor-aggregator AGG_ENV;  n2=$KEPT
+  if [ "${n1:-0}" -eq 0 ] && [ "${n2:-0}" -eq 0 ]; then
+    warn "в развёрнутых версиях секретов нет — значит они ещё берутся из Lockbox."
+    echo "     Оставляю привязки к Lockbox как есть: перелив кода ничего не сломает."
+    echo "     Чтобы переехать на переменные окружения, выполните полный ./setup.sh"
+    USE_LOCKBOX=1
+  else
+    ok "перенесено значений: admin-api $n1, aggregator $n2"
+    USE_LOCKBOX=0
+  fi
+else
+  ADMIN_ENV=(--environment "ADMIN_PASSWORD_HASH=$PW_HASH_KEEP"
+             --environment "JWT_SECRET=$JWT_SECRET_KEEP")
+  [ -n "$KEY_AV_KEEP" ] && AGG_ENV+=(--environment "SA_KEY_AVANZATO=$KEY_AV_KEEP")
+  [ -n "$KEY_AL_KEEP" ] && AGG_ENV+=(--environment "SA_KEY_ALGA=$KEY_AL_KEEP")
+  [ -n "$KEY_DA_KEEP" ] && AGG_ENV+=(--environment "SA_KEY_DARIA=$KEY_DA_KEEP")
+  AGG_ENV+=(--environment "JWT_SECRET=$JWT_SECRET_KEEP")
+  USE_LOCKBOX=0
+fi
+
+# Старые привязки к Lockbox нужны только пока не переехали
+LOCK_ADMIN=(); LOCK_AGG=()
+if [ "${USE_LOCKBOX:-0}" = 1 ]; then
+  LOCK_ADMIN=(--secret name=cm-secrets,key=ADMIN_PASSWORD_HASH,environment-variable=ADMIN_PASSWORD_HASH
+              --secret name=cm-secrets,key=JWT_SECRET,environment-variable=JWT_SECRET)
+  LOCK_AGG=(--secret name=cm-secrets,key=JWT_SECRET,environment-variable=JWT_SECRET
+            --secret name=cm-secrets,key=SA_KEY_AVANZATO,environment-variable=SA_KEY_AVANZATO
+            --secret name=cm-secrets,key=SA_KEY_ALGA,environment-variable=SA_KEY_ALGA
+            --secret name=cm-secrets,key=SA_KEY_DARIA,environment-variable=SA_KEY_DARIA)
+fi
+
 step "Деплой cm-admin-api"
 yc serverless function version create \
   --function-name cm-admin-api \
@@ -447,8 +502,8 @@ yc serverless function version create \
   --source-path ./admin-api \
   --service-account-id "$FUNC_SA" \
   --environment ALLOWED_ORIGIN="$ORIGIN" \
-  --secret name=cm-secrets,key=ADMIN_PASSWORD_HASH,environment-variable=ADMIN_PASSWORD_HASH \
-  --secret name=cm-secrets,key=JWT_SECRET,environment-variable=JWT_SECRET \
+  ${ADMIN_ENV[@]+"${ADMIN_ENV[@]}"} \
+  ${LOCK_ADMIN[@]+"${LOCK_ADMIN[@]}"} \
   >/dev/null || die "не задеплоить cm-admin-api"
 ok "cm-admin-api задеплоен"
 
@@ -461,7 +516,8 @@ yc serverless function version create \
   --service-account-id "$FUNC_SA" \
   --environment ALLOWED_ORIGIN="$ORIGIN" \
   --environment EXCLUDE_FUNCTIONS="$EXCLUDE_IDS" \
-  --secret name=cm-secrets,key=JWT_SECRET,environment-variable=JWT_SECRET \
+  ${AGG_ENV[@]+"${AGG_ENV[@]}"} \
+  ${LOCK_AGG[@]+"${LOCK_AGG[@]}"} \
   ${AGG_ARGS[@]+"${AGG_ARGS[@]}"} \
   >/dev/null || die "не задеплоить cm-monitor-aggregator"
 ok "cm-monitor-aggregator задеплоен"
