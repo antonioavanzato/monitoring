@@ -30,6 +30,7 @@ find_profile() {
 NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 D1=$(date -u -v-1d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "1 day ago" +%Y-%m-%dT%H:%M:%SZ)
 H6=$(date -u -v-6H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "6 hours ago" +%Y-%m-%dT%H:%M:%SZ)
+H1=$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "1 hour ago" +%Y-%m-%dT%H:%M:%SZ)
 
 fetch() {   # token folder metric from to downsamplingJson
   curl -s -m 40 -X POST \
@@ -50,14 +51,21 @@ analyse() {
   local flat='{"maxPoints":100,"gridAggregation":"SUM"}'
   local minute='{"gridInterval":60000,"gridAggregation":"SUM"}'
 
-  local done24 init24 doneMin initMin
+  local peak='{"gridInterval":60000,"gridAggregation":"MAX"}'
+  local sec15='{"gridInterval":15000,"gridAggregation":"SUM"}'
+
+  local done24 init24 doneMin initMin inflight fine
   done24=$(fetch "$token" "$folder" functions_finished "$D1" "$NOW" "$flat")
   init24=$(fetch "$token" "$folder" functions_inits    "$D1" "$NOW" "$flat")
   doneMin=$(fetch "$token" "$folder" functions_finished "$H6" "$NOW" "$minute")
   initMin=$(fetch "$token" "$folder" functions_inits    "$H6" "$NOW" "$minute")
+  # одновременно работающие экземпляры и вызовы с шагом 15 секунд —
+  # чтобы отличить «редко зовут» от «зовут пачками параллельно»
+  inflight=$(fetch "$token" "$folder" functions_inflight "$H6" "$NOW" "$peak")
+  fine=$(fetch "$token" "$folder" functions_finished "$H1" "$NOW" "$sec15")
 
   node -e '
-    const [done24, init24, doneMin, initMin] = process.argv.slice(1).map(s => {
+    const [done24, init24, doneMin, initMin, inflight, fine] = process.argv.slice(1).map(s => {
       try { return JSON.parse(s); } catch { return {metrics:[]}; }
     });
     const OWN = ["cm-admin-api","cm-monitor-aggregator"];
@@ -138,8 +146,31 @@ analyse() {
       gaps.forEach(g => { const k = g >= 10 ? "10+" : String(g); hist[k] = (hist[k]||0)+1; });
       console.log("     распределение пауз (мин → сколько раз): " +
                   Object.entries(hist).map(([k,v]) => k + "→" + v).join("  "));
+
+      // одновременно работающие экземпляры
+      const inf = (inflight.metrics || []).filter(m => nameOf(m) === r.n)
+        .flatMap(m => vals(m.timeseries)).filter(x => x > 0).sort((a,b) => b-a);
+      if (inf.length) {
+        console.log("     одновременных экземпляров: пик " + Math.round(inf[0]) +
+                    ", обычно " + Math.round(inf[Math.floor(inf.length/2)]));
+      }
+
+      // вызовы с шагом 15 секунд за последний час
+      const f = (fine.metrics || []).filter(m => nameOf(m) === r.n);
+      const buckets = [];
+      f.forEach(m => {
+        const v = vals(m.timeseries), t = m.timeseries?.timestamps || [];
+        v.forEach((x, i) => { if (x > 0) buckets.push([Number(t[i]), x]); });
+      });
+      if (buckets.length) {
+        const per = buckets.map(b => b[1]).sort((a,b) => b-a);
+        const active = new Set(buckets.map(b => Math.floor(b[0] / 15000))).size;
+        console.log("     за последний час, шаг 15 сек: активных отрезков " + active +
+                    " из 240, вызовов в отрезке — пик " + Math.round(per[0]) +
+                    ", медиана " + Math.round(per[Math.floor(per.length/2)]));
+      }
     });
-  ' "$done24" "$init24" "$doneMin" "$initMin"
+  ' "$done24" "$init24" "$doneMin" "$initMin" "$inflight" "$fine"
 }
 
 for pair in "Avanzato:b1gvs59n7rkplk5jmu21" "ALGA:b1gjcf3ucce90qgigaii" "Daria:b1gfon9pe6vpmlgaq0f7"; do
