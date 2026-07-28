@@ -106,3 +106,37 @@ curl -s -m 40 -X POST \
     console.log("  Если сумма заметно больше, а ряды одной функции различаются");
     console.log("  только версией — значит складывать их нельзя.");
   });'
+
+echo
+echo "${BLD}Сами точки ряда, шаг 15 секунд${OFF}"
+echo "  Если внутри одной минуты значение повторяется — это счётчик за период,"
+echo "  а не приращение, и складывать точки нельзя: получится завышение в 4 раза."
+
+curl -s -m 40 -X POST \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  "https://monitoring.api.cloud.yandex.net/monitoring/v2/data/read?folderId=$FOLDER" \
+  -d "{\"query\":\"\\\"$METRIC\\\"{service=\\\"serverless-functions\\\"}\",\"fromTime\":\"$FROM\",\"toTime\":\"$NOW\",\"downsampling\":{\"disabled\":true}}" \
+| node -e '
+  let raw=""; process.stdin.on("data",d=>raw+=d).on("end",()=>{
+    let j; try { j=JSON.parse(raw); } catch { console.log("  не разобрать ответ:", raw.slice(0,200)); return; }
+    if (j.code) {
+      console.log("  без даунсэмплинга API отказал (" + (j.message||"") + "), беру шаг 15 секунд");
+      return;
+    }
+    (j.metrics || []).forEach(m => {
+      const ts = m.timeseries || {};
+      const v = (ts.doubleValues || ts.int64Values || []).map(Number);
+      const t = ts.timestamps || [];
+      const name = m.labels?.function || m.labels?.resource_id || "?";
+      const nonZero = v.filter(x => x > 0).length;
+      if (!nonZero) return;
+      console.log("");
+      console.log("  " + name + " — точек " + v.length + ", ненулевых " + nonZero +
+                  ", сумма " + Math.round(v.reduce((a,b)=>a+(b||0),0)));
+      const last = Math.max(0, v.length - 40);
+      for (let i = last; i < v.length; i++) {
+        if (!(v[i] > 0)) continue;
+        console.log("     " + new Date(Number(t[i])).toISOString().slice(11,19) + "   " + v[i]);
+      }
+    });
+  });'
