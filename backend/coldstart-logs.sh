@@ -19,7 +19,23 @@ SINCE=${2:-3h}
 cd "$(dirname "$0")" || exit 1
 
 echo "${BLD}Читаю логи $FUNC за $SINCE${OFF}"
-LOGS=$(yc serverless function logs "$FUNC" --since "$SINCE" 2>&1)
+
+# yc на свежем окне догоняет настоящее время и переходит в слежение, не
+# завершаясь. Поэтому читаем в фоне и через WAIT секунд забираем что успело
+# прийти. Своего таймаута у yc нет, а GNU timeout в macOS отсутствует.
+WAIT=${CM_WAIT:-25}
+TMP=$(mktemp)
+trap 'rm -f "$TMP"' EXIT
+
+yc serverless function logs "$FUNC" --since "$SINCE" > "$TMP" 2>&1 &
+YCPID=$!
+( sleep "$WAIT"; kill "$YCPID" 2>/dev/null ) >/dev/null 2>&1 &
+KILLER=$!
+wait "$YCPID" 2>/dev/null
+kill "$KILLER" 2>/dev/null
+
+LOGS=$(cat "$TMP")
+echo "  получено строк: $(printf '%s\n' "$LOGS" | wc -l | tr -d ' ')"
 
 if echo "$LOGS" | grep -q "ERROR:\|not found"; then
   echo "$LOGS" | head -3
