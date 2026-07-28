@@ -138,5 +138,50 @@ curl -s -m 40 -X POST \
         if (!(v[i] > 0)) continue;
         console.log("     " + new Date(Number(t[i])).toISOString().slice(11,19) + "   " + v[i]);
       }
+
+      // ── подбор способа подсчёта ────────────────────────────────
+      // Метрика — счётчик за скользящую минуту, отдаваемый каждые 15 секунд.
+      // Значит один вызов виден в нескольких подряд идущих точках.
+      const pts = [];
+      for (let i = 0; i < v.length; i++) if (v[i] > 0) pts.push([Number(t[i]), v[i]]);
+
+      // 1. сумма всех точек — как считает дашборд сейчас
+      const sumAll = pts.reduce((a,p) => a + p[1], 0);
+
+      // 2. серии: подряд идущие непустые точки = один всплеск активности
+      let runs = 0, runPeak = 0, prevT = -1e15;
+      pts.forEach(([tt, val]) => {
+        if (tt - prevT > 20000) { runs++; runPeak += val; }
+        else runPeak += 0;
+        prevT = tt;
+      });
+
+      // 3. пик внутри серии — если за минуту было несколько вызовов,
+      //    счётчик покажет их число, и брать надо максимум, а не единицу
+      let peaks = 0, cur = 0; prevT = -1e15;
+      pts.forEach(([tt, val]) => {
+        if (tt - prevT > 20000) { peaks += cur; cur = val; }
+        else cur = Math.max(cur, val);
+        prevT = tt;
+      });
+      peaks += cur;
+
+      // 4. максимум в минуту
+      const byMin = new Map();
+      pts.forEach(([tt, val]) => {
+        const k = Math.floor(tt / 60000);
+        byMin.set(k, Math.max(byMin.get(k) || 0, val));
+      });
+      const minuteMax = [...byMin.values()].reduce((a,b) => a + b, 0);
+
+      console.log("");
+      console.log("  \x1b[1mсколько вызовов даёт каждый способ подсчёта\x1b[0m");
+      console.log("     сумма всех точек:        " + Math.round(sumAll) + "   ← так считает дашборд сейчас");
+      console.log("     число серий:             " + runs);
+      console.log("     пик в каждой серии:      " + Math.round(peaks));
+      console.log("     максимум в минуту:       " + Math.round(minuteMax));
+      console.log("");
+      console.log("  Сверьте с числом вызовов из ./coldstart-logs.sh за то же окно.");
+      console.log("  Совпавший способ и надо применить в агрегаторе.");
     });
   });'
