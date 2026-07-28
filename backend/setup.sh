@@ -302,18 +302,24 @@ prepare_project() {
     echo "  ── $name (профиль $profile)"
   } >&2
 
-  yc config profile activate "$profile" >/dev/null 2>&1 || die "не переключиться на профиль $profile"
+  # Сбой в одном облаке не должен ронять весь запуск: возвращаем ошибку,
+  # вызывающий пропустит этот проект и продолжит с остальными.
+  yc config profile activate "$profile" >/dev/null 2>&1 || {
+    echo "     ${YLW}!${OFF} не переключиться на профиль $profile, пропускаю" >&2; return 1; }
 
   local folder
   folder=$(yc config get folder-id 2>/dev/null)
-  [ -n "$folder" ] || die "у профиля $profile не задан folder-id (выполните 'yc init')"
+  [ -n "$folder" ] || {
+    echo "     ${YLW}!${OFF} у профиля $profile не задан folder-id, пропускаю" >&2; return 1; }
   echo "     каталог: $folder" >&2
 
   if yc iam service-account get cm-monitor >/dev/null 2>&1; then
     echo "     сервисный аккаунт cm-monitor уже есть" >&2
   else
-    yc iam service-account create --name cm-monitor >/dev/null \
-      || die "не создать сервисный аккаунт в $profile"
+    yc iam service-account create --name cm-monitor >/dev/null 2>&1 || {
+      echo "     ${YLW}!${OFF} нет прав на создание сервисного аккаунта в $profile — пропускаю это облако." >&2
+      echo "       Проверьте: yc config profile activate $profile && yc iam service-account list" >&2
+      return 1; }
     echo "     сервисный аккаунт создан" >&2
   fi
 
@@ -321,7 +327,8 @@ prepare_project() {
   sa_id=$(jsonval "$(yc iam service-account get cm-monitor --format json)" id)
   # в репетиции аккаунт не создавался, поэтому и id взяться неоткуда
   [ -z "$sa_id" ] && [ "$DRY" = 1 ] && sa_id="<id сервисного аккаунта cm-monitor>"
-  [ -n "$sa_id" ] || die "не получить id сервисного аккаунта в $profile"
+  [ -n "$sa_id" ] || {
+    echo "     ${YLW}!${OFF} не получить id сервисного аккаунта в $profile, пропускаю" >&2; return 1; }
 
   yc resource-manager folder add-access-binding "$folder" \
       --role monitoring.viewer --subject "serviceAccount:$sa_id" >/dev/null 2>&1
@@ -329,8 +336,8 @@ prepare_project() {
 
   local keyfile="key-$name.json"
   rm -f "$keyfile"
-  yc iam key create --service-account-name cm-monitor --output "$keyfile" >/dev/null 2>&1 \
-    || die "не создать ключ в $profile"
+  yc iam key create --service-account-name cm-monitor --output "$keyfile" >/dev/null 2>&1 || {
+    echo "     ${YLW}!${OFF} не выпустить ключ в $profile, пропускаю это облако" >&2; return 1; }
   local key_b64
   key_b64=$(b64 "$keyfile")
   rm -f "$keyfile"           # в base64 уже забрали, на диске не держим
@@ -338,9 +345,8 @@ prepare_project() {
   # Молча уехавший пустой ключ — худшее, что тут может случиться:
   # функция задеплоится и не увидит метрик. Лучше остановиться.
   if [ "$DRY" != 1 ] && [ ${#key_b64} -lt 100 ]; then
-    die "ключ для $name закодировался неправильно (получилось ${#key_b64} символов).
-Без этого агрегатор не сможет читать метрики. Проверьте, что команда
-'base64' работает: echo test | base64"
+    echo "     ${YLW}!${OFF} ключ для $name закодировался неправильно (${#key_b64} символов), пропускаю" >&2
+    return 1
   fi
   ok "$name готов" >&2
 
@@ -356,19 +362,26 @@ if [ "$CODE_ONLY" = 1 ]; then
   [ -n "$P_DARIA" ]    && KEY_DA="есть"
 else
 
+# Облако, где что-то не вышло, просто выпадает из этого запуска: дашборд
+# поднимется с остальными, а карточка покажет «не подключено».
 if [ -n "$P_AVANZATO" ]; then
-  RES=$(prepare_project avanzato "$P_AVANZATO") || exit 1
-  FOLDER_AV=${RES%%$'\t'*}; KEY_AV=${RES#*$'\t'}
+  if RES=$(prepare_project avanzato "$P_AVANZATO"); then
+    FOLDER_AV=${RES%%$'\t'*}; KEY_AV=${RES#*$'\t'}
+  else P_AVANZATO=""; fi
 fi
 if [ -n "$P_ALGA" ]; then
-  RES=$(prepare_project alga "$P_ALGA") || exit 1
-  FOLDER_AL=${RES%%$'\t'*}; KEY_AL=${RES#*$'\t'}
+  if RES=$(prepare_project alga "$P_ALGA"); then
+    FOLDER_AL=${RES%%$'\t'*}; KEY_AL=${RES#*$'\t'}
+  else P_ALGA=""; fi
 fi
 if [ -n "$P_DARIA" ]; then
-  RES=$(prepare_project daria "$P_DARIA") || exit 1
-  FOLDER_DA=${RES%%$'\t'*}; KEY_DA=${RES#*$'\t'}
+  if RES=$(prepare_project daria "$P_DARIA"); then
+    FOLDER_DA=${RES%%$'\t'*}; KEY_DA=${RES#*$'\t'}
+  else P_DARIA=""; fi
 fi
 unset RES
+
+[ -n "$P_AVANZATO$P_ALGA$P_DARIA" ] || die "ни одно облако подготовить не удалось — деплой отменён."
 fi
 
 # ─────────────────────────────────────────────────────────────
