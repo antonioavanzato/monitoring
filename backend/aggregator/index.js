@@ -91,6 +91,51 @@ async function readMetric(iam, folderId, query, from, to, downsampling) {
 
 const values = (ts) => (ts?.doubleValues || ts?.int64Values || []).map(Number);
 
+/**
+ * Поправочный коэффициент к сумме точек.
+ *
+ * functions_finished — счётчик за скользящую минуту, который Monitoring
+ * отдаёт каждые 15 секунд. Один вызов поэтому виден в нескольких подряд
+ * идущих точках, и простая сумма завышает итог в 3–4 раза. Проверено на
+ * живых данных: за 20 минут сумма точек дала 22 при семи вызовах в логах.
+ *
+ * Точный способ — считать серии подряд идущих непустых точек, но сырое
+ * разрешение доступно лишь на коротком окне: за месяц это сотни тысяч
+ * точек. Поэтому коэффициент измеряем на свежем часе и применяем к длинным
+ * периодам. Он пересчитывается при каждом обновлении, так что подстроится,
+ * если характер трафика изменится.
+ *
+ * Возвращает null, если измерить не вышло — тогда поправка не применяется
+ * и поведение остаётся прежним.
+ */
+function calibrate(payload) {
+  const points = [];
+  (payload.metrics || []).filter((m) => !isOwn(m)).forEach((m) => {
+    const v = values(m.timeseries);
+    const t = m.timeseries?.timestamps || [];
+    v.forEach((x, i) => { if (x > 0) points.push([Number(t[i]), x]); });
+  });
+  if (points.length < 8) return null;          // мало данных — не гадаем
+
+  points.sort((a, b) => a[0] - b[0]);
+
+  let runs = 0, prevT = -Infinity;
+  let sum = 0;
+  points.forEach(([t, v]) => {
+    // разрыв больше 20 секунд разделяет серии: шаг отдачи — 15 секунд
+    if (t - prevT > 20000) runs++;
+    prevT = t;
+    sum += v;
+  });
+
+  if (runs === 0) return null;
+  const k = sum / runs;
+
+  // Защита от нелепых значений: поправка не должна превращаться в фантазию.
+  if (!isFinite(k) || k < 1 || k > 6) return null;
+  return k;
+}
+
 // Ряд принадлежит самому дашборду? Отсеиваем по метке в ответе, а не
 // селектором в запросе: "function!=..." выбрасывает заодно все ряды, у
 // которых метки function нет вовсе, и данные пропадали целиком.
@@ -121,8 +166,9 @@ async function collect(key, saKeyBase64, folderId) {
     readMetric(iam, folderId, q(name), from, to, downsampling);
 
   const d1 = new Date(now.getTime() - 864e5);
+  const calibFrom = new Date(now.getTime() - 36e5);
 
-  const [calls, errors, errors24h, inits24h, finished24h, recent] = await Promise.all([
+  const [calls, errors, errors24h, inits24h, finished24h, recent, calibRaw] = await Promise.all([
     read('functions_finished', monthStart, now),
     read('functions_errors', d30, now),
     // за сутки — чтобы отличить «сломано сейчас» от «починили две недели назад»:
@@ -134,8 +180,14 @@ async function collect(key, saKeyBase64, folderId) {
     read('functions_finished', d1, now),
     // минутная сетка за последний час — ищем последнюю непустую точку (keep-warm)
     read('functions_finished', hourAgo, now,
-         { gridInterval: 60_000, gridAggregation: 'SUM' })
+         { gridInterval: 60_000, gridAggregation: 'SUM' }),
+    // сырые точки за час — по ним измеряем поправочный коэффициент
+    read('functions_finished', calibFrom, now, { disabled: true })
   ]);
+
+  const k = calibrate(calibRaw);
+  // Без измерения оставляем как было: завышенно, но не выдумано.
+  const fix = (n) => (k ? Math.round(n / k) : Math.round(n));
 
   const done24 = sumAll(finished24h);
   const cold24 = sumAll(inits24h);
@@ -156,12 +208,15 @@ async function collect(key, saKeyBase64, folderId) {
   return {
     key,
     folderId,
-    calls: sumAll(calls),
+    calls: fix(sumAll(calls)),
     limit: LIMIT,
-    errors30d: sumAll(errors),
-    errors24h: sumAll(errors24h),
-    calls24h: done24,
-    coldStarts24h: cold24,
+    errors30d: fix(sumAll(errors)),
+    errors24h: fix(sumAll(errors24h)),
+    calls24h: fix(done24),
+    coldStarts24h: fix(cold24),
+    // для сверки: сырая сумма и применённый коэффициент
+    callsRaw: Math.round(sumAll(calls)),
+    calibration: k ? Number(k.toFixed(2)) : null,
     // null, а не 0: без вызовов доля не определена и рисовать её нечестно
     coldStartPct: done24 > 0 ? Math.min(100, (cold24 / done24) * 100) : null,
     lastInvocationAt

@@ -141,6 +141,14 @@
 
     el.folder.textContent = project.folderId || '';
     el.pct.textContent = pct.toFixed(1) + '% · ' + fmt(calls) + ' / ' + fmt(limit);
+    // Показываем, откуда взялось число: метрика — счётчик за скользящую
+    // минуту, её сумму делим на измеренный коэффициент.
+    el.pct.title = project.calibration
+      ? 'сырая сумма точек ' + fmt(project.callsRaw) +
+        ', поделена на измеренный коэффициент ' + project.calibration
+      : (project.callsRaw
+          ? 'коэффициент измерить не удалось, показана сырая сумма — вероятно завышена'
+          : '');
     el.bar.style.width = shown.toFixed(2) + '%';
     el.bar.className = pct >= 90 ? 'err' : (pct >= 70 ? 'warn' : '');
 
