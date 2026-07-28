@@ -115,19 +115,41 @@ FOLDER_DA="b1gfon9pe6vpmlgaq0f7"   # Daria
 step "Определяю, какой профиль к какому облаку относится"
 echo "  Перебираю профили и смотрю, из какого виден каждый каталог."
 
-# Ищет профиль, из которого доступен указанный каталог.
-# Не находит — не беда: проект просто пропускаем, добавите потом.
+# Ищет профиль, отвечающий за указанный каталог.
+#
+# Сначала — по локальной настройке профиля: folder-id хранится в конфиге yc,
+# сети для этого не нужно, и ошибиться тут невозможно. Только если совпадения
+# нет, спрашиваем API, и то с повторами: при дрожащей сети один запрос может
+# ложно удаться, а другой ложно провалиться, и тогда каталог припишется не
+# тому облаку — а это значит деплой в чужой проект.
 find_profile() {
-  local folder="$1" label="$2" p
+  local folder="$1" label="$2" p cfg
+
   for p in $PROFILES; do
     yc config profile activate "$p" >/dev/null 2>&1 || continue
-    if yc resource-manager folder get "$folder" >/dev/null 2>&1; then
-      echo "     ${GRN}✓${OFF} $label → профиль $p" >&2
+    cfg=$(yc config get folder-id 2>/dev/null)
+    if [ "$cfg" = "$folder" ]; then
+      echo "     ${GRN}✓${OFF} $label → профиль $p (по настройке профиля)" >&2
       echo "$p"
       return 0
     fi
   done
-  echo "     ${YLW}—${OFF} $label ($folder): ни один профиль не видит этот каталог, пропускаю" >&2
+
+  # Ни у одного профиля этот каталог не выбран по умолчанию — спрашиваем API.
+  local try
+  for p in $PROFILES; do
+    yc config profile activate "$p" >/dev/null 2>&1 || continue
+    for try in 1 2 3; do
+      if yc resource-manager folder get "$folder" >/dev/null 2>&1; then
+        echo "     ${GRN}✓${OFF} $label → профиль $p (проверено через API)" >&2
+        echo "$p"
+        return 0
+      fi
+      sleep 1
+    done
+  done
+
+  echo "     ${YLW}—${OFF} $label ($folder): ни один профиль не отвечает за этот каталог, пропускаю" >&2
   echo ""
 }
 
@@ -171,6 +193,26 @@ done
 step "Проверяю, что ничего вашего не заденем"
 
 yc config profile activate "$P_HOME" >/dev/null 2>&1
+
+# Куда именно поедут функции — показываем ДО подтверждения, а не после.
+TARGET_FOLDER=$(yc config get folder-id 2>/dev/null)
+case "$TARGET_FOLDER" in
+  "$FOLDER_AV") TARGET_NAME="Avanzato" ;;
+  "$FOLDER_AL") TARGET_NAME="ALGA" ;;
+  "$FOLDER_DA") TARGET_NAME="Daria" ;;
+  "")           die "не удалось определить каталог профиля '$P_HOME'. Проверьте сеть и 'yc config get folder-id'." ;;
+  *)            TARGET_NAME="НЕИЗВЕСТНЫЙ ПРОЕКТ" ;;
+esac
+
+echo
+echo "  ${BLD}Функции будут созданы здесь:${OFF}"
+echo "     профиль:  $P_HOME"
+echo "     каталог:  $TARGET_FOLDER  (${BLD}$TARGET_NAME${OFF})"
+if [ "$TARGET_NAME" = "НЕИЗВЕСТНЫЙ ПРОЕКТ" ]; then
+  warn "этот каталог не совпадает ни с одним из трёх известных — проверьте дважды."
+fi
+echo
+
 CLASH=""
 for f in cm-admin-api cm-monitor-aggregator; do
   yc serverless function get "$f" >/dev/null 2>&1 && CLASH="$CLASH\n     функция $f"
