@@ -107,7 +107,8 @@ lockbox_payload() {
   | node -e 'let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
       let j; try { j = JSON.parse(s); } catch { return; }
       for (const e of (j.entries || [])) {
-        if (e.key && e.textValue) console.log(e.key + "\t" + e.textValue);
+        const v = e.text_value ?? e.textValue;   // yc отдаёт snake_case
+        if (e.key && v) console.log(e.key + "\t" + v);
       }
     });' 2>/dev/null
 }
@@ -532,12 +533,26 @@ fi
 # Старые привязки к Lockbox нужны только пока не переехали
 LOCK_ADMIN=(); LOCK_AGG=()
 if [ "${USE_LOCKBOX:-0}" = 1 ]; then
-  LOCK_ADMIN=(--secret name=cm-secrets,key=ADMIN_PASSWORD_HASH,environment-variable=ADMIN_PASSWORD_HASH
-              --secret name=cm-secrets,key=JWT_SECRET,environment-variable=JWT_SECRET)
-  LOCK_AGG=(--secret name=cm-secrets,key=JWT_SECRET,environment-variable=JWT_SECRET
-            --secret name=cm-secrets,key=SA_KEY_AVANZATO,environment-variable=SA_KEY_AVANZATO
-            --secret name=cm-secrets,key=SA_KEY_ALGA,environment-variable=SA_KEY_ALGA
-            --secret name=cm-secrets,key=SA_KEY_DARIA,environment-variable=SA_KEY_DARIA)
+  # Привязываемся только к тем ключам, что в секрете есть. Жёсткий список
+  # ронял деплой: SA_KEY_ALGA там нет, потому что ALGA не подключена.
+  LOCK_KEYS=$(yc lockbox secret get cm-secrets --format json 2>/dev/null \
+    | node -e 'let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
+        let j; try { j = JSON.parse(s); } catch { return; }
+        const v = j.current_version || j.currentVersion || {};
+        const k = v.payload_entry_keys || v.payloadEntryKeys || [];
+        console.log(k.join(" "));
+      });' 2>/dev/null)
+  [ -n "$LOCK_KEYS" ] || LOCK_KEYS="ADMIN_PASSWORD_HASH JWT_SECRET"
+  echo "     ключи в секрете: $LOCK_KEYS"
+
+  for k in $LOCK_KEYS; do
+    case "$k" in
+      ADMIN_PASSWORD_HASH) LOCK_ADMIN+=(--secret "name=cm-secrets,key=$k,environment-variable=$k") ;;
+      JWT_SECRET)          LOCK_ADMIN+=(--secret "name=cm-secrets,key=$k,environment-variable=$k")
+                           LOCK_AGG+=(--secret "name=cm-secrets,key=$k,environment-variable=$k") ;;
+      SA_KEY_*)            LOCK_AGG+=(--secret "name=cm-secrets,key=$k,environment-variable=$k") ;;
+    esac
+  done
 fi
 
 step "Деплой cm-admin-api"
