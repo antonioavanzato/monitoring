@@ -99,6 +99,19 @@ jsonval() { grep -o "\"$2\": *\"[^\"]*\"" <<<"$1" | head -1 | sed 's/.*: *"//; s
 # Нужны для --code-only, чтобы перелить код, не спрашивая пароль и не
 # перевыпуская ключи. Значения секретов больше не хранятся отдельно —
 # единственный их экземпляр живёт в самой функции.
+# Значения из секрета Lockbox: "имя<TAB>значение". Нужны для переезда на
+# переменные окружения — берём то, что уже работает, вместо перевыпуска
+# ключей. Это не требует никаких прав в чужих облаках.
+lockbox_payload() {
+  yc lockbox payload get --name cm-secrets --format json 2>/dev/null \
+  | node -e 'let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
+      let j; try { j = JSON.parse(s); } catch { return; }
+      for (const e of (j.entries || [])) {
+        if (e.key && e.textValue) console.log(e.key + "\t" + e.textValue);
+      }
+    });' 2>/dev/null
+}
+
 current_env() {
   yc serverless function version get --function-name "$1" --format json 2>/dev/null \
   | node -e 'let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
@@ -478,10 +491,30 @@ if [ "$CODE_ONLY" = 1 ]; then
   keep_env cm-admin-api ADMIN_ENV;         n1=$KEPT
   keep_env cm-monitor-aggregator AGG_ENV;  n2=$KEPT
   if [ "${n1:-0}" -eq 0 ] && [ "${n2:-0}" -eq 0 ]; then
-    warn "в развёрнутых версиях секретов нет — значит они ещё берутся из Lockbox."
-    echo "     Оставляю привязки к Lockbox как есть: перелив кода ничего не сломает."
-    echo "     Чтобы переехать на переменные окружения, выполните полный ./setup.sh"
-    USE_LOCKBOX=1
+    # Функции ещё на Lockbox. Переезжаем: забираем значения оттуда и
+    # передаём переменными окружения. Ключи не перевыпускаются, права в
+    # чужих облаках не нужны.
+    echo "     в развёрнутых версиях секретов нет — беру их из Lockbox"
+    MIGRATED=0
+    while IFS=$'\t' read -r key val; do
+      [ -n "$key" ] || continue
+      case "$key" in
+        ADMIN_PASSWORD_HASH) ADMIN_ENV+=(--environment "$key=$val"); MIGRATED=$((MIGRATED+1)) ;;
+        JWT_SECRET)          ADMIN_ENV+=(--environment "$key=$val")
+                             AGG_ENV+=(--environment "$key=$val"); MIGRATED=$((MIGRATED+1)) ;;
+        SA_KEY_*)            AGG_ENV+=(--environment "$key=$val"); MIGRATED=$((MIGRATED+1)) ;;
+      esac
+    done < <(lockbox_payload)
+
+    if [ "$MIGRATED" -ge 2 ]; then
+      ok "перенесено из Lockbox: $MIGRATED значений — после проверки секрет можно удалить"
+      USE_LOCKBOX=0
+    else
+      warn "не удалось прочитать Lockbox, оставляю прежние привязки."
+      echo "     Перелив кода при этом ничего не сломает."
+      ADMIN_ENV=(); AGG_ENV=()
+      USE_LOCKBOX=1
+    fi
   else
     ok "перенесено значений: admin-api $n1, aggregator $n2"
     USE_LOCKBOX=0
