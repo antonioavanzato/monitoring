@@ -113,11 +113,26 @@ lockbox_payload() {
     });' 2>/dev/null
 }
 
+# Разные версии yc отдают текущую версию функции по-разному, а тихо вернувшийся
+# пустой ответ здесь опаснее ошибки: секреты не переносятся, и деплой уносит
+# рабочую функцию без переменных окружения. Поэтому пробуем оба способа.
 current_env() {
-  yc serverless function version get --function-name "$1" --format json 2>/dev/null \
+  local out
+  out=$(yc serverless function version get --function-name "$1" --format json 2>/dev/null)
+  case "$out" in
+    *environment*) ;;
+    *) out=$(yc serverless function version list --function-name "$1" --format json 2>/dev/null) ;;
+  esac
+  printf '%s' "$out" \
   | node -e 'let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
       let j; try { j = JSON.parse(s); } catch { return; }
-      const e = j.environment || {};
+      // list отдаёт массив версий, свежая — с самой поздней датой создания
+      if (Array.isArray(j)) {
+        j = j.filter(v => v && v.environment)
+             .sort((a,b) => String(b.created_at||b.createdAt||"")
+                            .localeCompare(String(a.created_at||a.createdAt||"")))[0];
+      }
+      const e = (j && j.environment) || {};
       for (const k of Object.keys(e)) console.log(k + "\t" + e[k]);
     });' 2>/dev/null
 }
@@ -578,10 +593,21 @@ if [ "$CODE_ONLY" = 1 ]; then
       ok "перенесено из Lockbox: $MIGRATED значений — после проверки секрет можно удалить"
       USE_LOCKBOX=0
     else
-      warn "не удалось прочитать Lockbox, оставляю прежние привязки."
-      echo "     Перелив кода при этом ничего не сломает."
-      ADMIN_ENV=(); AGG_ENV=()
-      USE_LOCKBOX=1
+      # Lockbox удалён (так и задумано — он платный), а из развёрнутых версий
+      # прочитать не вышло. Деплоить в таком виде нельзя: функции остались бы
+      # без пароля и ключей. Останавливаемся, прежние версии продолжают работать.
+      die "не удалось прочитать ни развёрнутые версии, ни Lockbox.
+
+Деплой отменён, рабочие функции не тронуты — дашборд продолжает работать.
+
+Проверьте, что команда возвращает переменные окружения:
+
+    yc serverless function version get --function-name cm-admin-api --format json | head -40
+
+Если она ругается или не показывает environment — сообщите вывод.
+Обходной путь: полный запуск './setup.sh' (без --code-only). Он задаст
+пароль заново и перевыпустит ключи там, где есть права; для остальных
+облаков положите ключи файлами key-<облако>.json."
     fi
   else
     ok "перенесено значений: admin-api $n1, aggregator $n2"
