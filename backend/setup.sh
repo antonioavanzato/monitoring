@@ -589,6 +589,25 @@ if [ "$CODE_ONLY" = 1 ]; then
 else
   ADMIN_ENV=(--environment "ADMIN_PASSWORD_HASH=$PW_HASH_KEEP"
              --environment "JWT_SECRET=$JWT_SECRET_KEEP")
+
+  # Облако, которое не удалось подготовить сейчас, не должно исчезнуть с
+  # дашборда: если ключ к нему уже уехал в прошлый раз, забираем его из
+  # развёрнутой версии. Иначе один отказ в правах гасит рабочую карточку.
+  CARRIED=0
+  while IFS=$'\t' read -r key val; do
+    [ -n "$val" ] || continue
+    case "$key" in
+      SA_KEY_AVANZATO) [ -z "$KEY_AV_KEEP" ] && { KEY_AV_KEEP="$val"
+          AGG_ARGS+=(--environment "FOLDER_AVANZATO=$FOLDER_AV"); CARRIED=$((CARRIED+1)); } ;;
+      SA_KEY_ALGA)     [ -z "$KEY_AL_KEEP" ] && { KEY_AL_KEEP="$val"
+          AGG_ARGS+=(--environment "FOLDER_ALGA=$FOLDER_AL");     CARRIED=$((CARRIED+1)); } ;;
+      SA_KEY_DARIA)    [ -z "$KEY_DA_KEEP" ] && { KEY_DA_KEEP="$val"
+          AGG_ARGS+=(--environment "FOLDER_DARIA=$FOLDER_DA");    CARRIED=$((CARRIED+1)); } ;;
+    esac
+  done < <(current_env cm-monitor-aggregator)
+  [ "$CARRIED" -gt 0 ] && \
+    echo "  ${GRN}✓${OFF} ключей взято из прежней версии: $CARRIED (облака, что не подготовились сейчас)"
+
   [ -n "$KEY_AV_KEEP" ] && AGG_ENV+=(--environment "SA_KEY_AVANZATO=$KEY_AV_KEEP")
   [ -n "$KEY_AL_KEEP" ] && AGG_ENV+=(--environment "SA_KEY_ALGA=$KEY_AL_KEEP")
   [ -n "$KEY_DA_KEEP" ] && AGG_ENV+=(--environment "SA_KEY_DARIA=$KEY_DA_KEEP")
