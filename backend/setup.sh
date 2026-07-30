@@ -205,7 +205,9 @@ find_profile() {
 # указать облако без всяких догадок, поэтому проверяем его первым.
 MANUAL_AV=""; MANUAL_AL=""; MANUAL_DA=""
 manual_key() {
-  local name="$1" label="$2" file="key-$name.json"
+  # bash 3.2 на macOS не видит name внутри той же строки local — объявляем раздельно
+  local name="$1" label="$2"
+  local file="key-$name.json"
   [ -f "$file" ] || return 1
   if ! node -e 'const j=require("./"+process.argv[1]);
        if(!j.id||!j.service_account_id||!j.private_key) process.exit(1);' "$file" 2>/dev/null; then
@@ -407,7 +409,8 @@ prepare_project() {
 # Ключ из файла, положенного рядом руками. Права ему выдаёт владелец облака
 # в консоли — нам остаётся только закодировать файл и убрать его с диска.
 take_manual_key() {
-  local name="$1" label="$2" file="key-$name.json" key_b64
+  local name="$1" label="$2"
+  local file="key-$name.json" key_b64
   {
     echo
     echo "  ── $label (ключ из файла $file)"
