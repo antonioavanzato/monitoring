@@ -109,25 +109,38 @@ const values = (ts) => (ts?.doubleValues || ts?.int64Values || []).map(Number);
  * и поведение остаётся прежним.
  */
 function calibrate(payload) {
-  const points = [];
+  // Серии считаем по каждой функции отдельно. Если сложить точки всего
+  // каталога в одну кучу, одновременные вызовы разных функций сольются в одну
+  // серию: вызовов насчитается меньше, коэффициент выйдет завышенным, а итог —
+  // заниженным. У каталога с одной активной функцией разницы нет, у ALGA с
+  // тремя счёт расходился в разы.
+  const byFunction = new Map();
   (payload.metrics || []).filter((m) => !isOwn(m)).forEach((m) => {
+    const name = m.labels?.function || m.labels?.resource_id || '?';
     const v = values(m.timeseries);
     const t = m.timeseries?.timestamps || [];
-    v.forEach((x, i) => { if (x > 0) points.push([Number(t[i]), x]); });
-  });
-  if (points.length < 8) return null;          // мало данных — не гадаем
-
-  points.sort((a, b) => a[0] - b[0]);
-
-  let runs = 0, prevT = -Infinity;
-  let sum = 0;
-  points.forEach(([t, v]) => {
-    // разрыв больше 20 секунд разделяет серии: шаг отдачи — 15 секунд
-    if (t - prevT > 20000) runs++;
-    prevT = t;
-    sum += v;
+    v.forEach((x, i) => {
+      if (x > 0) {
+        if (!byFunction.has(name)) byFunction.set(name, []);
+        byFunction.get(name).push([Number(t[i]), x]);
+      }
+    });
   });
 
+  let total = 0, runs = 0, sum = 0;
+  for (const points of byFunction.values()) {
+    total += points.length;
+    points.sort((a, b) => a[0] - b[0]);
+    let prevT = -Infinity;
+    points.forEach(([t, v]) => {
+      // разрыв больше 20 секунд разделяет серии: шаг отдачи — 15 секунд
+      if (t - prevT > 20000) runs++;
+      prevT = t;
+      sum += v;
+    });
+  }
+
+  if (total < 8) return null;                  // мало данных — не гадаем
   if (runs === 0) return null;
   const k = sum / runs;
 
