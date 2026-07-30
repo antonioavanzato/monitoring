@@ -179,7 +179,13 @@ async function collect(key, saKeyBase64, folderId) {
     readMetric(iam, folderId, q(name), from, to, downsampling);
 
   const d1 = new Date(now.getTime() - 864e5);
-  const calibFrom = new Date(now.getTime() - 36e5);
+  // Коэффициент меряем на трёх часах, а не на одном: за час замер сильно
+  // зависит от времени суток. Ночью, когда работает только таймер, вызовы
+  // редкие и разрозненные, днём плотнее — и коэффициент прыгал (мерили 3,0 и
+  // 5,06 на одном и том же облаке в разные дни). Три часа сглаживают это,
+  // оставаясь в пределах, на которых Monitoring отдаёт сырые точки.
+  const calibFrom = new Date(now.getTime() - 3 * 36e5);
+  const calibFromShort = new Date(now.getTime() - 36e5);
 
   const [calls, errors, errors24h, inits24h, finished24h, recent, calibRaw] = await Promise.all([
     read('functions_finished', monthStart, now),
@@ -194,11 +200,18 @@ async function collect(key, saKeyBase64, folderId) {
     // минутная сетка за последний час — ищем последнюю непустую точку (keep-warm)
     read('functions_finished', hourAgo, now,
          { gridInterval: 60_000, gridAggregation: 'SUM' }),
-    // сырые точки за час — по ним измеряем поправочный коэффициент
+    // сырые точки — по ним измеряем поправочный коэффициент
     read('functions_finished', calibFrom, now, { disabled: true })
   ]);
 
-  const k = calibrate(calibRaw);
+  // Трёхчасовое окно может не вернуться: сырых точек там втрое больше, и
+  // Monitoring вправе отказать. Молча остаться без поправки — худший исход
+  // (итог завысится в разы), поэтому в таком случае честно переспрашиваем час.
+  let k = calibrate(calibRaw);
+  if (!k) {
+    const short = await read('functions_finished', calibFromShort, now, { disabled: true });
+    k = calibrate(short);
+  }
   // Без измерения оставляем как было: завышенно, но не выдумано.
   const fix = (n) => (k ? Math.round(n / k) : Math.round(n));
 
