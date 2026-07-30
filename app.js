@@ -140,7 +140,11 @@
     var shown = Math.min(100, pct);
 
     el.folder.textContent = project.folderId || '';
-    el.pct.textContent = pct.toFixed(1) + '% · ' + fmt(calls) + ' / ' + fmt(limit);
+    // Если коэффициент измерить не удалось, число остаётся сырой суммой и
+    // завышено в несколько раз. Раньше об этом говорила только подсказка при
+    // наведении — на телефоне её никто не видит, и карточка врала молча.
+    el.pct.textContent = pct.toFixed(1) + '% · ' + fmt(calls) + ' / ' + fmt(limit)
+      + (!project.calibration && project.callsRaw ? ' ≈' : '');
     // Показываем, откуда взялось число: метрика — счётчик за скользящую
     // минуту, её сумму делим на измеренный коэффициент.
     el.pct.title = project.calibration
