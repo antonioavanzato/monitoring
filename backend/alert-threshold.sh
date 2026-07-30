@@ -26,11 +26,24 @@ cd "$(dirname "$0")" || exit 1
 ORIG=$(yc config profile list 2>/dev/null | grep ACTIVE | awk '{print $1}')
 trap '[ -n "${ORIG:-}" ] && yc config profile activate "$ORIG" >/dev/null 2>&1' EXIT
 
+PROFILES=$(yc config profile list 2>/dev/null | sed 's/ ACTIVE//' | awk '{print $1}')
+
 FOUND=""
-for p in $(yc config profile list 2>/dev/null | sed 's/ ACTIVE//' | awk '{print $1}'); do
+for p in $PROFILES; do
   yc config profile activate "$p" >/dev/null 2>&1 || continue
   if [ "$(yc config get folder-id 2>/dev/null)" = "$FOLDER" ]; then FOUND="$p"; break; fi
 done
+
+# Каталог может быть виден из профиля, для которого он не выбран по умолчанию —
+# так у нас профиль daria видит каталог ALGA. Читать метрики этого достаточно.
+if [ -z "$FOUND" ]; then
+  for p in $PROFILES; do
+    yc config profile activate "$p" >/dev/null 2>&1 || continue
+    if yc resource-manager folder get "$FOLDER" >/dev/null 2>&1; then
+      FOUND="$p"; echo "  каталог виден из профиля $p (не его каталог по умолчанию)"; break
+    fi
+  done
+fi
 [ -n "$FOUND" ] || { echo "не нашёл профиль для каталога $FOLDER"; exit 1; }
 
 TOKEN=$(yc iam create-token 2>/dev/null)
