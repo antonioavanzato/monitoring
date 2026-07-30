@@ -349,7 +349,7 @@ step "Создаю сервисные аккаунты и забираю клю�
 # Без ассоциативных массивов: в macOS штатный bash 3.2, там их нет.
 # Функция печатает в stdout строку "folderId<TAB>base64ключа", логи идут в stderr.
 prepare_project() {
-  local name="$1" profile="$2"
+  local name="$1" profile="$2" folder="$3"
   {
     echo
     echo "  ── $name (профиль $profile)"
@@ -360,24 +360,24 @@ prepare_project() {
   yc config profile activate "$profile" >/dev/null 2>&1 || {
     echo "     ${YLW}!${OFF} не переключиться на профиль $profile, пропускаю" >&2; return 1; }
 
-  local folder
-  folder=$(yc config get folder-id 2>/dev/null)
-  [ -n "$folder" ] || {
-    echo "     ${YLW}!${OFF} у профиля $profile не задан folder-id, пропускаю" >&2; return 1; }
+  # Каталог берём тот, что искали, и передаём его каждой команде явно.
+  # Раньше он брался из настроек профиля — и когда один профиль видел чужой
+  # каталог, ключ выпускался в его собственном: карточка ALGA показала бы
+  # цифры Дарьи. Профиль здесь отвечает только за то, от чьего имени входим.
   echo "     каталог: $folder" >&2
 
-  if yc iam service-account get cm-monitor >/dev/null 2>&1; then
+  if yc iam service-account get cm-monitor --folder-id "$folder" >/dev/null 2>&1; then
     echo "     сервисный аккаунт cm-monitor уже есть" >&2
   else
-    yc iam service-account create --name cm-monitor >/dev/null 2>&1 || {
+    yc iam service-account create --name cm-monitor --folder-id "$folder" >/dev/null 2>&1 || {
       echo "     ${YLW}!${OFF} нет прав на создание сервисного аккаунта в $profile — пропускаю это облако." >&2
-      echo "       Проверьте: yc config profile activate $profile && yc iam service-account list" >&2
+      echo "       Проверьте: yc config profile activate $profile && yc iam service-account list --folder-id $folder" >&2
       return 1; }
     echo "     сервисный аккаунт создан" >&2
   fi
 
   local sa_id
-  sa_id=$(jsonval "$(yc iam service-account get cm-monitor --format json)" id)
+  sa_id=$(jsonval "$(yc iam service-account get cm-monitor --folder-id "$folder" --format json)" id)
   # в репетиции аккаунт не создавался, поэтому и id взяться неоткуда
   [ -z "$sa_id" ] && [ "$DRY" = 1 ] && sa_id="<id сервисного аккаунта cm-monitor>"
   [ -n "$sa_id" ] || {
@@ -389,7 +389,8 @@ prepare_project() {
 
   local keyfile="key-$name.json"
   rm -f "$keyfile"
-  yc iam key create --service-account-name cm-monitor --output "$keyfile" >/dev/null 2>&1 || {
+  yc iam key create --service-account-name cm-monitor --folder-id "$folder" \
+      --output "$keyfile" >/dev/null 2>&1 || {
     echo "     ${YLW}!${OFF} не выпустить ключ в $profile, пропускаю это облако" >&2; return 1; }
   local key_b64
   key_b64=$(b64 "$keyfile")
@@ -438,21 +439,21 @@ else
 # Облако, где что-то не вышло, просто выпадает из этого запуска: дашборд
 # поднимется с остальными, а карточка покажет «не подключено».
 if [ -n "$P_AVANZATO" ]; then
-  if RES=$(prepare_project avanzato "$P_AVANZATO"); then
+  if RES=$(prepare_project avanzato "$P_AVANZATO" "$FOLDER_AV"); then
     FOLDER_AV=${RES%%$'\t'*}; KEY_AV=${RES#*$'\t'}
   else P_AVANZATO=""; fi
 elif [ -n "$MANUAL_AV" ]; then
   if RES=$(take_manual_key avanzato "Avanzato"); then KEY_AV="$RES"; else MANUAL_AV=""; fi
 fi
 if [ -n "$P_ALGA" ]; then
-  if RES=$(prepare_project alga "$P_ALGA"); then
+  if RES=$(prepare_project alga "$P_ALGA" "$FOLDER_AL"); then
     FOLDER_AL=${RES%%$'\t'*}; KEY_AL=${RES#*$'\t'}
   else P_ALGA=""; fi
 elif [ -n "$MANUAL_AL" ]; then
   if RES=$(take_manual_key alga "ALGA"); then KEY_AL="$RES"; else MANUAL_AL=""; fi
 fi
 if [ -n "$P_DARIA" ]; then
-  if RES=$(prepare_project daria "$P_DARIA"); then
+  if RES=$(prepare_project daria "$P_DARIA" "$FOLDER_DA"); then
     FOLDER_DA=${RES%%$'\t'*}; KEY_DA=${RES#*$'\t'}
   else P_DARIA=""; fi
 elif [ -n "$MANUAL_DA" ]; then
