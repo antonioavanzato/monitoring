@@ -188,10 +188,32 @@ P_AVANZATO=$(find_profile "$FOLDER_AV" "Avanzato")
 P_ALGA=$(find_profile "$FOLDER_AL" "ALGA")
 P_DARIA=$(find_profile "$FOLDER_DA" "Daria")
 
+# Ключ, положенный рядом руками.
+#
+# Профиль yc нужен только чтобы выпустить ключ сервисного аккаунта. Если войти
+# в облако из терминала не выходит (двухфакторная у владельца, отказ обмена
+# свежего OAuth-токена на IAM), ключ можно выпустить в консоли браузера и
+# положить файлом сюда. Дальше он ничем не отличается от выпущенного нами.
+MANUAL_AV=""; MANUAL_AL=""; MANUAL_DA=""
+manual_key() {
+  local name="$1" label="$2" file="key-$name.json"
+  [ -f "$file" ] || return 1
+  if ! node -e 'const j=require("./"+process.argv[1]);
+       if(!j.id||!j.service_account_id||!j.private_key) process.exit(1);' "$file" 2>/dev/null; then
+    echo "     ${YLW}!${OFF} $label: файл $file не похож на ключ сервисного аккаунта, пропускаю" >&2
+    return 1
+  fi
+  echo "     ${GRN}✓${OFF} $label → ключ из файла $file (профиль не нужен)" >&2
+  return 0
+}
+[ -z "$P_AVANZATO" ] && manual_key avanzato "Avanzato" && MANUAL_AV=1
+[ -z "$P_ALGA" ]     && manual_key alga     "ALGA"     && MANUAL_AL=1
+[ -z "$P_DARIA" ]    && manual_key daria    "Daria"    && MANUAL_DA=1
+
 READY=0
-[ -n "$P_AVANZATO" ] && READY=$((READY+1))
-[ -n "$P_ALGA" ]     && READY=$((READY+1))
-[ -n "$P_DARIA" ]    && READY=$((READY+1))
+[ -n "$P_AVANZATO$MANUAL_AV" ] && READY=$((READY+1))
+[ -n "$P_ALGA$MANUAL_AL" ]     && READY=$((READY+1))
+[ -n "$P_DARIA$MANUAL_DA" ]    && READY=$((READY+1))
 
 [ "$READY" -gt 0 ] || die "не найдено ни одного из трёх облаков.
 Выполните 'yc init' хотя бы для одного и запустите ./setup.sh снова."
@@ -367,13 +389,32 @@ prepare_project() {
   printf '%s\t%s\n' "$folder" "$key_b64"
 }
 
+# Ключ из файла, положенного рядом руками. Права ему выдаёт владелец облака
+# в консоли — нам остаётся только закодировать файл и убрать его с диска.
+take_manual_key() {
+  local name="$1" label="$2" file="key-$name.json" key_b64
+  {
+    echo
+    echo "  ── $label (ключ из файла $file)"
+  } >&2
+  key_b64=$(b64 "$file")
+  if [ ${#key_b64} -lt 100 ]; then
+    echo "     ${YLW}!${OFF} файл закодировался неправильно (${#key_b64} символов), пропускаю" >&2
+    return 1
+  fi
+  rm -f "$file"
+  echo "     файл прочитан и удалён с диска" >&2
+  ok "$label готов" >&2
+  printf '%s\n' "$key_b64"
+}
+
 KEY_AV=""; KEY_AL=""; KEY_DA=""
 
 if [ "$CODE_ONLY" = 1 ]; then
-  # ключи уже лежат в Lockbox; отмечаем, какие облака участвуют
-  [ -n "$P_AVANZATO" ] && KEY_AV="есть"
-  [ -n "$P_ALGA" ]     && KEY_AL="есть"
-  [ -n "$P_DARIA" ]    && KEY_DA="есть"
+  # ключи уже лежат в развёрнутой версии функции; отмечаем, какие облака участвуют
+  [ -n "$P_AVANZATO$MANUAL_AV" ] && KEY_AV="есть"
+  [ -n "$P_ALGA$MANUAL_AL" ]     && KEY_AL="есть"
+  [ -n "$P_DARIA$MANUAL_DA" ]    && KEY_DA="есть"
 else
 
 # Облако, где что-то не вышло, просто выпадает из этого запуска: дашборд
@@ -382,20 +423,27 @@ if [ -n "$P_AVANZATO" ]; then
   if RES=$(prepare_project avanzato "$P_AVANZATO"); then
     FOLDER_AV=${RES%%$'\t'*}; KEY_AV=${RES#*$'\t'}
   else P_AVANZATO=""; fi
+elif [ -n "$MANUAL_AV" ]; then
+  if RES=$(take_manual_key avanzato "Avanzato"); then KEY_AV="$RES"; else MANUAL_AV=""; fi
 fi
 if [ -n "$P_ALGA" ]; then
   if RES=$(prepare_project alga "$P_ALGA"); then
     FOLDER_AL=${RES%%$'\t'*}; KEY_AL=${RES#*$'\t'}
   else P_ALGA=""; fi
+elif [ -n "$MANUAL_AL" ]; then
+  if RES=$(take_manual_key alga "ALGA"); then KEY_AL="$RES"; else MANUAL_AL=""; fi
 fi
 if [ -n "$P_DARIA" ]; then
   if RES=$(prepare_project daria "$P_DARIA"); then
     FOLDER_DA=${RES%%$'\t'*}; KEY_DA=${RES#*$'\t'}
   else P_DARIA=""; fi
+elif [ -n "$MANUAL_DA" ]; then
+  if RES=$(take_manual_key daria "Daria"); then KEY_DA="$RES"; else MANUAL_DA=""; fi
 fi
 unset RES
 
-[ -n "$P_AVANZATO$P_ALGA$P_DARIA" ] || die "ни одно облако подготовить не удалось — деплой отменён."
+[ -n "$P_AVANZATO$P_ALGA$P_DARIA$MANUAL_AV$MANUAL_AL$MANUAL_DA" ] \
+  || die "ни одно облако подготовить не удалось — деплой отменён."
 fi
 
 # ─────────────────────────────────────────────────────────────
@@ -420,9 +468,9 @@ KEY_DA_KEEP="${KEY_DA:-}"
 # Каталог передаём, если облако настроено: при полном запуске это значит
 # «ключ выпущен», при --code-only — «профиль для него нашёлся».
 AGG_ARGS=()
-if [ -n "$P_AVANZATO" ]; then AGG_ARGS+=(--environment "FOLDER_AVANZATO=$FOLDER_AV"); fi
-if [ -n "$P_ALGA" ];     then AGG_ARGS+=(--environment "FOLDER_ALGA=$FOLDER_AL");     fi
-if [ -n "$P_DARIA" ];    then AGG_ARGS+=(--environment "FOLDER_DARIA=$FOLDER_DA");    fi
+if [ -n "$P_AVANZATO$MANUAL_AV" ]; then AGG_ARGS+=(--environment "FOLDER_AVANZATO=$FOLDER_AV"); fi
+if [ -n "$P_ALGA$MANUAL_AL" ];     then AGG_ARGS+=(--environment "FOLDER_ALGA=$FOLDER_AL");     fi
+if [ -n "$P_DARIA$MANUAL_DA" ];    then AGG_ARGS+=(--environment "FOLDER_DARIA=$FOLDER_DA");    fi
 
 unset PW_HASH KEY_AV KEY_AL KEY_DA
 
