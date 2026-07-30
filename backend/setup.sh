@@ -167,26 +167,30 @@ find_profile() {
   done
 
   # Ни у одного профиля этот каталог не выбран по умолчанию — спрашиваем API.
-  local try
+  #
+  # Раньше хватало одного удачного ответа из трёх попыток, и этого оказалось
+  # мало: каталог ALGA так приписался профилю Daria. Теперь требуем, чтобы
+  # каталог отвечал все три раза подряд и отдавал именно свой id.
+  local try okc got
   for p in $PROFILES; do
     yc config profile activate "$p" >/dev/null 2>&1 || continue
+    okc=0
     for try in 1 2 3; do
-      if yc resource-manager folder get "$folder" >/dev/null 2>&1; then
-        echo "     ${GRN}✓${OFF} $label → профиль $p (проверено через API)" >&2
-        echo "$p"
-        return 0
-      fi
+      got=$(jsonval "$(yc resource-manager folder get "$folder" --format json 2>/dev/null)" id)
+      [ "$got" = "$folder" ] && okc=$((okc+1))
       sleep 1
     done
+    if [ "$okc" = 3 ]; then
+      echo "     ${GRN}✓${OFF} $label → профиль $p (проверено через API, 3 из 3)" >&2
+      echo "$p"
+      return 0
+    fi
+    [ "$okc" = 0 ] || echo "     ${YLW}!${OFF} $label: профиль $p ответил $okc раз из 3 — не доверяю, ищу дальше" >&2
   done
 
   echo "     ${YLW}—${OFF} $label ($folder): ни один профиль не отвечает за этот каталог, пропускаю" >&2
   echo ""
 }
-
-P_AVANZATO=$(find_profile "$FOLDER_AV" "Avanzato")
-P_ALGA=$(find_profile "$FOLDER_AL" "ALGA")
-P_DARIA=$(find_profile "$FOLDER_DA" "Daria")
 
 # Ключ, положенный рядом руками.
 #
@@ -194,6 +198,11 @@ P_DARIA=$(find_profile "$FOLDER_DA" "Daria")
 # в облако из терминала не выходит (двухфакторная у владельца, отказ обмена
 # свежего OAuth-токена на IAM), ключ можно выпустить в консоли браузера и
 # положить файлом сюда. Дальше он ничем не отличается от выпущенного нами.
+#
+# Файл имеет приоритет над поиском профиля, и это не придирка. Поиск через API
+# уже один раз соврал: каталог ALGA приписался профилю Daria, и метрики ALGA
+# читались бы из чужого каталога. Явно положенный файл — единственный способ
+# указать облако без всяких догадок, поэтому проверяем его первым.
 MANUAL_AV=""; MANUAL_AL=""; MANUAL_DA=""
 manual_key() {
   local name="$1" label="$2" file="key-$name.json"
@@ -206,9 +215,15 @@ manual_key() {
   echo "     ${GRN}✓${OFF} $label → ключ из файла $file (профиль не нужен)" >&2
   return 0
 }
-[ -z "$P_AVANZATO" ] && manual_key avanzato "Avanzato" && MANUAL_AV=1
-[ -z "$P_ALGA" ]     && manual_key alga     "ALGA"     && MANUAL_AL=1
-[ -z "$P_DARIA" ]    && manual_key daria    "Daria"    && MANUAL_DA=1
+manual_key avanzato "Avanzato" && MANUAL_AV=1
+manual_key alga     "ALGA"     && MANUAL_AL=1
+manual_key daria    "Daria"    && MANUAL_DA=1
+
+# Профиль ищем только для тех облаков, ключ к которым не положен файлом.
+P_AVANZATO=""; P_ALGA=""; P_DARIA=""
+[ -z "$MANUAL_AV" ] && P_AVANZATO=$(find_profile "$FOLDER_AV" "Avanzato")
+[ -z "$MANUAL_AL" ] && P_ALGA=$(find_profile "$FOLDER_AL" "ALGA")
+[ -z "$MANUAL_DA" ] && P_DARIA=$(find_profile "$FOLDER_DA" "Daria")
 
 READY=0
 [ -n "$P_AVANZATO$MANUAL_AV" ] && READY=$((READY+1))
